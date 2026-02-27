@@ -16,6 +16,10 @@ def load_palettes(path: str | Path) -> Dict[str, List[str]]:
     for season, colors in raw.items():
         if isinstance(colors, list):
             normalized[season] = [str(c) for c in colors]
+        elif isinstance(colors, dict):
+            palette = colors.get("colors")
+            if isinstance(palette, list):
+                normalized[season] = [str(c) for c in palette]
 
     return normalized
 

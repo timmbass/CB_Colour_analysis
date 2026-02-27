@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 
 # Stable cheek-region landmark sets for MediaPipe FaceMesh (468 landmarks).
@@ -25,29 +28,38 @@ class FaceRegionResult:
 
 
 class FaceMeshDetector:
-    def __init__(self, static_image_mode: bool = True, max_num_faces: int = 1) -> None:
-        self._mp_face_mesh = mp.solutions.face_mesh
-        self._mesh = self._mp_face_mesh.FaceMesh(
-            static_image_mode=static_image_mode,
-            max_num_faces=max_num_faces,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+    def __init__(
+        self,
+        static_image_mode: bool = True,
+        max_num_faces: int = 1,
+        model_path: Optional[Path] = None,
+    ) -> None:
+        _ = static_image_mode
+        model_path = model_path or (Path(__file__).resolve().parents[1] / "assets" / "models" / "face_landmarker.task")
+        base_options = python.BaseOptions(model_asset_path=str(model_path))
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=max_num_faces,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False,
         )
+        self._detector = vision.FaceLandmarker.create_from_options(options)
 
     def detect_single_face(self, image_rgb: np.ndarray) -> Optional[np.ndarray]:
         """Return (468,2) pixel landmarks for one face, or None if not found."""
         h, w = image_rgb.shape[:2]
-        results = self._mesh.process(image_rgb)
-        if not results.multi_face_landmarks:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        results = self._detector.detect(mp_image)
+        if not results.face_landmarks:
             return None
 
-        landmarks = results.multi_face_landmarks[0].landmark
+        landmarks = results.face_landmarks[0]
         points = np.array([(lm.x * w, lm.y * h) for lm in landmarks], dtype=np.float32)
         return points
 
     def close(self) -> None:
-        self._mesh.close()
+        self._detector.close()
 
 
 def _poly_from_indices(landmarks_px: np.ndarray, indices: List[int]) -> np.ndarray:
