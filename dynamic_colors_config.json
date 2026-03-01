@@ -1,0 +1,62 @@
+{
+  "axis_normalization": {
+    "temp": {"mean": 0.0, "std": 0.75, "z_clip": 2.0},
+    "value": {"mean": 0.0, "std": 0.75, "z_clip": 2.0},
+    "chroma": {"mean": 0.0, "std": 0.75, "z_clip": 2.0},
+    "contrast": {"mean": 0.0, "std": 0.75, "z_clip": 2.0}
+  },
+  "families": {
+    "signature_blue": {
+      "hue_cool": 224.0,
+      "hue_warm": 196.0,
+      "sat_scale": 1.0,
+      "sat_offset": 0.0,
+      "light_offset": 0.0
+    },
+    "neutral": {
+      "hue_cool": 220.0,
+      "hue_warm": 34.0,
+      "sat_scale": 0.35,
+      "sat_offset": -8.0,
+      "light_offset": 2.0
+    },
+    "accent": {
+      "hue_cool": 334.0,
+      "hue_warm": 16.0,
+      "sat_scale": 1.08,
+      "sat_offset": 0.0,
+      "light_offset": -1.0
+    },
+    "everyday_green": {
+      "hue_cool": 152.0,
+      "hue_warm": 92.0,
+      "sat_scale": 0.92,
+      "sat_offset": -2.0,
+      "light_offset": -1.0
+    },
+    "pop_colour": {
+      "hue_cool": 288.0,
+      "hue_warm": 24.0,
+      "sat_scale": 1.1,
+      "sat_offset": 2.0,
+      "light_offset": 0.0
+    }
+  },
+  "mapping": {
+    "saturation": {"min": 30.0, "max": 82.0},
+    "lightness": {"deep": 34.0, "light": 76.0},
+    "contrast_sat_boost": 4.0,
+    "contrast_light_drop": 3.0,
+    "sat_min": 18.0,
+    "sat_max": 86.0,
+    "light_min": 28.0,
+    "light_max": 82.0
+  },
+  "candidate_search": {
+    "hue_steps_deg": [-12, -6, 0, 6, 12],
+    "sat_steps": [-8, 0, 8],
+    "light_steps": [-6, 0, 6],
+    "max_per_family": 12,
+    "center_prune_threshold": 0.18
+  }
+}

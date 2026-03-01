@@ -1,0 +1,285 @@
+{
+  "version": "1.0",
+  "lexicon": {
+    "season_names": {
+      "spring": "Spring",
+      "summer": "Summer",
+      "autumn": "Autumn",
+      "winter": "Winter",
+      "soft_autumn": "Soft Autumn",
+      "warm_autumn": "Warm Autumn",
+      "cool_summer": "Cool Summer",
+      "soft_summer": "Soft Summer",
+      "cool_winter": "Cool Winter",
+      "bright_winter": "Bright Winter",
+      "warm_spring": "Warm Spring",
+      "neutral_spring": "Neutral Spring"
+    },
+    "season_temperature_family": {
+      "spring": "warm",
+      "summer": "cool",
+      "autumn": "warm",
+      "winter": "cool",
+      "soft_autumn": "warm",
+      "warm_autumn": "warm",
+      "cool_summer": "cool",
+      "soft_summer": "cool",
+      "cool_winter": "cool",
+      "bright_winter": "cool",
+      "warm_spring": "warm",
+      "neutral_spring": "warm"
+    },
+    "tone_words": {
+      "soft": ["softened", "blended", "muted"],
+      "bright": ["clear", "crisp", "vivid"],
+      "deep": ["inky", "rich", "grounded"],
+      "light": ["airy", "light", "delicate"]
+    }
+  },
+  "bands": {
+    "confidence": [
+      { "id": "low", "max": 0.6, "label": "lower confidence" },
+      { "id": "mid", "min": 0.6, "max": 0.78, "label": "moderate confidence" },
+      { "id": "high", "min": 0.78, "label": "high confidence" }
+    ],
+    "temp": [
+      { "id": "cool", "max": -0.2, "label": "cool-leaning" },
+      { "id": "neutral", "min": -0.2, "max": 0.2, "label": "balanced warmth" },
+      { "id": "warm", "min": 0.2, "label": "warm-leaning" }
+    ],
+    "value": [
+      { "id": "light", "max": -0.25, "label": "lighter depth" },
+      { "id": "medium", "min": -0.25, "max": 0.25, "label": "medium depth" },
+      { "id": "deep", "min": 0.25, "label": "deeper depth" }
+    ],
+    "chroma": [
+      { "id": "soft", "max": -0.25, "label": "soft chroma" },
+      { "id": "medium", "min": -0.25, "max": 0.25, "label": "medium chroma" },
+      { "id": "bright", "min": 0.25, "label": "bright chroma" }
+    ],
+    "contrast": [
+      { "id": "low", "max": -0.2, "label": "lower contrast" },
+      { "id": "medium", "min": -0.2, "max": 0.4, "label": "moderate contrast" },
+      { "id": "high", "min": 0.4, "label": "higher contrast" }
+    ]
+  },
+  "templates": {
+    "headline": "{season_display} - {tagline}",
+    "taglines": {
+      "soft_autumn": "Muted warmth",
+      "warm_autumn": "Rich, earthy, golden",
+      "autumn": "Rich, earthy, golden",
+      "soft_summer": "Cool, softened tones",
+      "cool_summer": "Cool, softened tones",
+      "summer": "Cool, softened tones",
+      "cool_winter": "Cool, clear contrast",
+      "bright_winter": "Cool, clear contrast",
+      "winter": "Cool, clear contrast",
+      "warm_spring": "Warm, clear brightness",
+      "neutral_spring": "Warm, clear brightness",
+      "spring": "Warm, clear brightness"
+    },
+    "blocks": [
+      {
+        "id": "close_call",
+        "when": { "confidence_band": ["low"], "top2_present": true },
+        "title": "Close call",
+        "text": "This result is a close call between {top1_display} and {top2_display}. Use the quick tests below to decide which feels more harmonious on you."
+      },
+      {
+        "id": "axes_summary",
+        "title": "What we measured",
+        "bullets": [
+          "Warmth: {temp.band_label} ({temp.value_rounded})",
+          "Depth: {value.band_label} ({value.value_rounded})",
+          "Saturation: {chroma.band_label} ({chroma.value_rounded})",
+          "Contrast: {contrast.band_label} ({contrast.value_rounded})"
+        ]
+      },
+      {
+        "id": "core_guidance",
+        "title": "How to use this",
+        "text": "You tend to look best in {chroma_descriptor} colours with {temp_descriptor}, especially when outfits stay {contrast_descriptor}."
+      },
+      {
+        "id": "best_colors",
+        "title": "Best colours",
+        "bullets_from": "profile.best_colors"
+      },
+      {
+        "id": "best_neutrals",
+        "title": "Best neutrals",
+        "bullets_from": "profile.best_neutrals"
+      },
+      {
+        "id": "metals",
+        "title": "Metals",
+        "bullets_from": "profile.metals"
+      },
+      {
+        "id": "avoid",
+        "title": "Avoid",
+        "bullets_from": "profile.avoid"
+      },
+      {
+        "id": "tie_breaker_tests",
+        "when": { "confidence_band": ["low"], "top2_present": true },
+        "title": "Tie-breaker tests",
+        "bullets_from": "tie_breaker_tests"
+      },
+      {
+        "id": "style_note",
+        "title": "Style note",
+        "text": "{profile.style_note}"
+      }
+    ],
+    "descriptors": {
+      "chroma_descriptor": {
+        "soft": "softer, blended",
+        "medium": "balanced",
+        "bright": "clearer, more saturated"
+      },
+      "temp_descriptor": {
+        "cool": "cooler undertones",
+        "neutral": "balanced warmth",
+        "warm": "warm undertones"
+      },
+      "contrast_descriptor": {
+        "low": "gentle and tonal",
+        "medium": "clean but not stark",
+        "high": "crisp and defined"
+      }
+    }
+  },
+  "tie_breaker_tests": {
+    "pairs": [
+      {
+        "pair": ["winter", "summer"],
+        "bullets": [
+          "Stark white vs soft grey near the face",
+          "Cobalt vs dusty blue drape test",
+          "Bright silver vs brushed silver jewellery"
+        ]
+      },
+      {
+        "pair": ["spring", "autumn"],
+        "bullets": [
+          "Clear coral vs muted terracotta near the face",
+          "Bright camel vs deep chocolate neutral test",
+          "Clear teal vs moss green side-by-side"
+        ]
+      }
+    ],
+    "default": [
+      "True white vs cream near the face",
+      "Pure black vs charcoal contrast test",
+      "Neon pop vs muted tone comparison"
+    ]
+  },
+  "profiles": {
+    "spring": {
+      "tagline_key": "spring",
+      "best_colors": ["Warm coral", "Clear peach", "Light turquoise", "Apple green", "Golden yellow"],
+      "best_neutrals": ["Warm ivory", "Camel", "Light warm beige", "Warm navy"],
+      "metals": ["Yellow gold", "Light rose gold"],
+      "avoid": ["Dusty mauves", "Charcoal-heavy palettes", "Icy greys"],
+      "style_note": "Keep outfits bright, fresh, and warm with clear colour contrast."
+    },
+    "summer": {
+      "tagline_key": "summer",
+      "best_colors": ["Dusty rose", "Powder blue", "Soft navy", "Muted berry", "Sage"],
+      "best_neutrals": ["Soft white", "Cool taupe", "Dove grey", "Soft navy"],
+      "metals": ["Silver", "White gold", "Platinum"],
+      "avoid": ["Neon brights", "Orange-heavy warmth", "Harsh black-white contrast"],
+      "style_note": "Lean into softly blended colour stories rather than sharp jumps."
+    },
+    "autumn": {
+      "tagline_key": "autumn",
+      "best_colors": ["Olive", "Moss green", "Burnt orange", "Rust", "Cinnamon", "Muted teal"],
+      "best_neutrals": ["Warm brown", "Camel", "Chocolate", "Cream", "Deep olive"],
+      "metals": ["Yellow gold", "Bronze", "Burnished gold"],
+      "avoid": ["Icy pastels", "True white", "Blue-based brights"],
+      "style_note": "Let warmth and richness lead; avoid cool, sharp extremes."
+    },
+    "winter": {
+      "tagline_key": "winter",
+      "best_colors": ["True red", "Fuchsia", "Cobalt", "Emerald", "Icy pink"],
+      "best_neutrals": ["Black", "True white", "Charcoal", "Ink navy"],
+      "metals": ["Silver", "White gold", "Gunmetal"],
+      "avoid": ["Dusty warm tones", "Muted camel", "Muddy olives"],
+      "style_note": "Use high clarity and defined contrast to keep features crisp."
+    },
+    "soft_autumn": {
+      "tagline_key": "soft_autumn",
+      "best_colors": ["Muted rust", "Soft olive", "Dusty peach", "Warm sage"],
+      "best_neutrals": ["Mushroom", "Warm grey-brown", "Soft camel"],
+      "metals": ["Antique gold"],
+      "avoid": ["Neon brights", "Icy black-white contrast"],
+      "style_note": "Favour tonal combinations over sharp contrast."
+    },
+    "warm_autumn": {
+      "tagline_key": "warm_autumn",
+      "best_colors": ["Spice orange", "Terracotta", "Olive", "Mustard", "Brick red"],
+      "best_neutrals": ["Camel", "Warm taupe", "Chocolate", "Olive brown"],
+      "metals": ["Yellow gold", "Bronze"],
+      "avoid": ["Icy lilac", "Blue-black", "Cool magenta"],
+      "style_note": "Prioritise warm, earthy richness over cool clarity."
+    },
+    "cool_summer": {
+      "tagline_key": "cool_summer",
+      "best_colors": ["Rose", "Periwinkle", "Slate blue", "Cool raspberry", "Soft plum"],
+      "best_neutrals": ["Soft white", "Blue-grey", "Cool taupe", "Soft navy"],
+      "metals": ["Silver", "White gold"],
+      "avoid": ["Mustard", "Orange-red", "Golden beige"],
+      "style_note": "Choose cool, elegant blends and avoid overt warmth."
+    },
+    "soft_summer": {
+      "tagline_key": "soft_summer",
+      "best_colors": ["Misty blue", "Mauve", "Soft berry", "Sage", "Muted teal"],
+      "best_neutrals": ["Mushroom", "Soft charcoal", "Taupe", "Soft navy"],
+      "metals": ["Brushed silver", "Soft white gold"],
+      "avoid": ["Neon tones", "Harsh black", "Warm orange"],
+      "style_note": "Keep contrast gentle and colours softly diffused."
+    },
+    "cool_winter": {
+      "tagline_key": "cool_winter",
+      "best_colors": ["Blue-red", "Royal blue", "Magenta", "Pine green", "Icy lavender"],
+      "best_neutrals": ["Black", "White", "Cool charcoal", "Navy"],
+      "metals": ["Silver", "White gold", "Platinum"],
+      "avoid": ["Camel", "Orange-brown", "Muted olive"],
+      "style_note": "Crisp contrast and cool clarity are your strongest levers."
+    },
+    "bright_winter": {
+      "tagline_key": "bright_winter",
+      "best_colors": ["Hot pink", "Electric blue", "True red", "Emerald", "Lemon ice"],
+      "best_neutrals": ["Black", "True white", "Ink navy", "Cool charcoal"],
+      "metals": ["High-shine silver", "White gold"],
+      "avoid": ["Dusty tones", "Muted khaki", "Warm cream"],
+      "style_note": "Bold clarity and contrast make your features look most vivid."
+    },
+    "warm_spring": {
+      "tagline_key": "warm_spring",
+      "best_colors": ["Peach", "Coral", "Leaf green", "Aqua", "Daffodil"],
+      "best_neutrals": ["Warm ivory", "Light camel", "Golden beige", "Warm navy"],
+      "metals": ["Yellow gold", "Light rose gold"],
+      "avoid": ["Dusty rose", "Cool charcoal", "Blue-black"],
+      "style_note": "Warm, bright colours keep your complexion lively and clear."
+    },
+    "neutral_spring": {
+      "tagline_key": "neutral_spring",
+      "best_colors": ["Salmon", "Apricot", "Turquoise", "Fresh green", "Light warm red"],
+      "best_neutrals": ["Ivory", "Warm stone", "Camel", "Soft navy"],
+      "metals": ["Gold", "Champagne metal"],
+      "avoid": ["Smoky cool tones", "Black-heavy palettes", "Muted mauves"],
+      "style_note": "Use lively warm-leaning colours while keeping looks polished and clean."
+    },
+    "fallback_profile": {
+      "tagline_key": "autumn",
+      "best_colors": ["Olive", "Teal", "Rust", "Berry"],
+      "best_neutrals": ["Taupe", "Soft navy", "Warm grey", "Cream"],
+      "metals": ["Gold", "Silver"],
+      "avoid": ["Neon extremes", "Very icy contrasts"],
+      "style_note": "Use medium contrast outfits and prioritise harmony over extremes."
+    }
+  }
+}

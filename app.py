@@ -1,26 +1,64 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import time
+import textwrap
 from pathlib import Path
 
 import cv2
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import streamlit as st
 
 import numpy as np
 
 from src.calibration import apply_calibration, margin_confidence, predict_topk
 from src.color_features import ColorFeatures, compute_robust_lab_features, compute_skin_chroma_variance
+from src.copy_renderer import render_text_suggestions
 from src.drape_scoring import apply_drape_color, evaluate_drape_scores
+from src.dynamic_colors import config_hash, load_dynamic_colors_config, suggest_dynamic_colors
 from src.diagnostics_regions import compute_definition_score, compute_region_diagnostics, render_diagnostics_overlay
-from src.drape import render_drape_strip
+try:
+    from src.drape import render_color_strip
+except ImportError:
+    # Fallback for stale environments where render_color_strip is unavailable.
+    def render_color_strip(colors: list[str], width: int, height: int, style: str = "blocks") -> np.ndarray | None:
+        if not colors or width <= 0 or height <= 0:
+            return None
+        if style != "blocks":
+            raise ValueError("Only 'blocks' style is supported")
+
+        def _hex_to_rgb_local(hex_color: str) -> tuple[int, int, int]:
+            c = hex_color.strip().lstrip("#")
+            if len(c) != 6:
+                return (128, 128, 128)
+            return tuple(int(c[i : i + 2], 16) for i in (0, 2, 4))
+
+        strip = np.zeros((height, width, 3), dtype=np.uint8)
+        block_width = max(1, width // len(colors))
+        border = np.array([228, 228, 228], dtype=np.uint8)
+        outer = np.array([180, 180, 180], dtype=np.uint8)
+
+        for i, color_hex in enumerate(colors):
+            start_x = i * block_width
+            end_x = width if i == len(colors) - 1 else min(width, (i + 1) * block_width)
+            strip[:, start_x:end_x] = _hex_to_rgb_local(color_hex)
+            if i > 0 and start_x < width:
+                strip[:, max(0, start_x - 1) : start_x] = border
+
+        strip[0:1, :] = outer
+        strip[-1:, :] = outer
+        strip[:, 0:1] = outer
+        strip[:, -1:] = outer
+        return strip
 from src.face_regions import FaceMeshDetector, build_region_masks, render_debug_overlay
 from src.image_io import decode_uploaded_image
 from src.image_quality import evaluate_image_quality
 from src.palettes import (
     load_palette_metadata,
     load_palettes,
-    load_recommendations,
-    load_season_descriptions,
     palette_for_season,
 )
 from src.season_index import IDX_TO_SEASON, SEASON_TO_IDX, SEASONS
@@ -28,7 +66,7 @@ from src.season_rules import classify_season
 from src.stress_features import cool_stress_delta, summer_winter_nudge
 from src.variant_rules import choose_variant
 from ui.components import plot_season_map, plot_season_scores
-from ui.copy import AXIS_HELP, AXIS_LABELS, LOW_CONF_TIEBREAKER_BULLETS
+from ui.copy import AXIS_HELP, AXIS_LABELS
 from ui.styles import apply_base_styles
 
 
@@ -49,6 +87,11 @@ show_debug = st.checkbox("Show debug overlays (cheek polylines + masks)", value=
 show_per_image = st.checkbox("Show per-image results", value=True)
 show_diagnostics = st.checkbox("Show diagnostics panel", value=True)
 show_drape_previews = st.checkbox("Show top drape previews (winning season)", value=False)
+use_advanced_dynamic = st.checkbox(
+    "Optimise drape colours (slower)",
+    value=False,
+    help="Tries multiple candidate colours and selects the one that produces the best drape score.",
+)
 season_map_y_axis = st.selectbox("Season Map Y-axis", options=["value", "chroma", "contrast"], index=0)
 use_quality_weighted_aggregation = st.checkbox(
     "Use quality-weighted multi-image aggregation",
@@ -83,9 +126,10 @@ def get_face_detector() -> FaceMeshDetector:
 
 @st.cache_data(show_spinner=False)
 def analyze_image(file_bytes: bytes, wb_method_choice: str) -> dict:
+    image_hash = hashlib.sha256(file_bytes).hexdigest()
     image_rgb = decode_uploaded_image(file_bytes)
     if image_rgb is None:
-        return {"status": "decode_failed"}
+        return {"status": "decode_failed", "image_hash": image_hash}
     image_rgb_pre_wb = image_rgb.copy()
 
     wb_method_used = wb_method_choice
@@ -117,6 +161,7 @@ def analyze_image(file_bytes: bytes, wb_method_choice: str) -> dict:
         return {
             "status": "no_face",
             "image_rgb": image_rgb,
+            "image_hash": image_hash,
             "wb_method": wb_method_used,
             "wb_applied": wb_applied,
         }
@@ -137,6 +182,7 @@ def analyze_image(file_bytes: bytes, wb_method_choice: str) -> dict:
         return {
             "status": "weak_sample",
             "image_rgb": image_rgb,
+            "image_hash": image_hash,
             "regions": regions,
             "quality": quality,
             "wb_method": wb_method_used,
@@ -146,6 +192,7 @@ def analyze_image(file_bytes: bytes, wb_method_choice: str) -> dict:
     return {
         "status": "ok",
         "image_rgb": image_rgb,
+        "image_hash": image_hash,
         "regions": regions,
         "features": features,
         "pre_wb_skin_b": None if pre_wb_features is None else float(pre_wb_features.b),
@@ -333,6 +380,310 @@ def load_calibration_params(path: str = "calibration_params.json") -> dict:
     except Exception:
         return {"alpha": 0.5, "bias": [0.0, 0.0, 0.0, 0.0], "gamma": 3.0, "source": "default"}
 
+
+@st.cache_data(show_spinner=False)
+def load_dynamic_color_config(path: str = "dynamic_colors_config.json") -> dict:
+    return load_dynamic_colors_config(path)
+
+
+@st.cache_data(show_spinner=False)
+def compute_dynamic_color_suggestions(
+    image_hash: str,
+    axes_payload: tuple[float, float, float, float],
+    mode: str,
+    cfg_hash: str,
+    return_set: bool,
+    cfg_json: str,
+    season_hint: str | None,
+    image_rgb: np.ndarray | None,
+    regions,
+    baseline_skin: ColorFeatures | None,
+    diagnostics: bool,
+) -> dict:
+    _ = image_hash, cfg_hash
+    config = json.loads(cfg_json)
+    axes = {
+        "temp": float(axes_payload[0]),
+        "value": float(axes_payload[1]),
+        "chroma": float(axes_payload[2]),
+        "contrast": float(axes_payload[3]),
+    }
+    face_context = None
+    if mode == "advanced":
+        face_context = {
+            "image_rgb": image_rgb,
+            "regions": regions,
+            "baseline_skin": baseline_skin,
+            "season_hint": season_hint,
+        }
+    return suggest_dynamic_colors(
+        face_context=face_context,
+        axes=axes,
+        mode=mode,
+        config=config,
+        diagnostics=diagnostics,
+        return_set=return_set,
+    )
+
+
+def _compose_personalised_drape_preview(image_rgb: np.ndarray, dynamic_suggestions: dict, strip_height: int = 92) -> np.ndarray:
+    colors = [c.get("hex", "#888888") for c in dynamic_suggestions.get("colors", []) if c.get("hex")]
+    strip = render_color_strip(colors=colors, width=image_rgb.shape[1], height=strip_height, style="blocks")
+    if strip is None:
+        return image_rgb
+    return np.vstack([image_rgb, strip])
+
+
+def _render_color_swatch(hex_code: str) -> None:
+    st.markdown(
+        f"<div style='height:72px;border-radius:10px;border:1px solid #d9d9d9;background:{hex_code};'></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_dynamic_best_colours(title: str, suggestions: dict, axes_used: dict[str, float], show_diag: bool) -> None:
+    st.write(f"**{title}**")
+    swatches = suggestions.get("colors", [])
+    n_cols = 4 if len(swatches) >= 8 else 3
+    for i in range(0, len(swatches), n_cols):
+        row = swatches[i : i + n_cols]
+        cols = st.columns(n_cols)
+        for col, color in zip(cols, row):
+            with col:
+                _render_color_swatch(color["hex"])
+                st.caption(color.get("label", color.get("name", "")))
+                st.code(color["hex"])
+                st.caption(color.get("reason", ""))
+    st.caption("These shades are computed from your measured warmth, depth, saturation, and contrast.")
+
+    with st.expander("How this was chosen", expanded=False):
+        st.write(
+            f"- Axes used: temp={axes_used['temp']:.3f}, value={axes_used['value']:.3f}, "
+            f"chroma={axes_used['chroma']:.3f}, contrast={axes_used['contrast']:.3f}"
+        )
+        st.write(f"- Mode: **{suggestions.get('mode', 'simple')}**")
+        diag_payload = suggestions.get("diagnostics", {})
+        fallback = diag_payload.get("advanced_fallback_reason")
+        if fallback:
+            st.write(f"- Advanced fallback: `{fallback}`")
+        if show_diag and suggestions.get("mode") == "advanced":
+            for color in suggestions.get("colors", []):
+                adv = color.get("advanced", {})
+                if not adv:
+                    continue
+                st.write(
+                    f"- {color['name']}: penalty={adv.get('penalty', 0.0):.4f}, "
+                    f"candidates_tested={int(adv.get('candidates_tested', 0))}"
+                )
+                top3 = adv.get("top3", [])
+                if top3:
+                    st.code(", ".join(f"{row['hex']} ({row['penalty']:.4f})" for row in top3))
+
+
+COPY_RULES_PATH = Path("assets/copy_rules.v1.json")
+
+
+def _to_copy_key(value: str | None) -> str:
+    if not value:
+        return ""
+    return "_".join(value.strip().lower().replace("-", " ").split())
+
+
+def _build_copy_payload(
+    image_id: str,
+    season_display: str,
+    top1_season: str,
+    top2_season: str | None,
+    top1_variant: str | None,
+    confidence: float,
+    axes: dict[str, float],
+    dynamic_suggestions: dict,
+) -> dict:
+    return {
+        "image_id": image_id,
+        "season_display": season_display,
+        "top1_key": _to_copy_key(top1_season),
+        "top2_key": _to_copy_key(top2_season),
+        "top1_variant_key": _to_copy_key(top1_variant),
+        "profile_key": _to_copy_key(top1_variant) or _to_copy_key(top1_season),
+        "top1_display": top1_variant or top1_season,
+        "top2_display": top2_season or "",
+        "confidence": float(confidence),
+        "axes": {
+            "temp": float(axes.get("temp", 0.0)),
+            "value": float(axes.get("value", 0.0)),
+            "chroma": float(axes.get("chroma", 0.0)),
+            "contrast": float(axes.get("contrast", 0.0)),
+        },
+        "dynamic_colors": dynamic_suggestions.get("colors", []),
+    }
+
+
+def _render_text_suggestions_section(suggestions: dict) -> None:
+    headline = str(suggestions.get("headline", "")).strip()
+    if headline:
+        st.markdown(f"**{headline}**")
+
+    for block in suggestions.get("blocks", []):
+        title = str(block.get("title", "")).strip()
+        if title:
+            st.markdown(f"**{title}**")
+        if block.get("id") == "close_call":
+            st.warning(str(block.get("text", "")))
+        elif block.get("text"):
+            st.markdown(str(block.get("text")))
+        bullets = block.get("bullets", [])
+        if isinstance(bullets, list) and bullets:
+            st.markdown("\n".join(f"- {item}" for item in bullets))
+
+
+def _build_scorecard_pdf_bytes(
+    subject_name: str,
+    season_display: str,
+    confidence: float,
+    axes: dict[str, float],
+    palette_hex: list[str],
+    dynamic_suggestions: dict,
+    text_suggestions: dict,
+    input_rgb: np.ndarray | None,
+) -> bytes:
+    fig = plt.figure(figsize=(8.27, 11.69), dpi=150)
+    fig.patch.set_facecolor("white")
+
+    ax_header = fig.add_axes([0.07, 0.91, 0.86, 0.07])
+    ax_header.axis("off")
+    ax_header.text(0.0, 0.62, "Color Analysis Scorecard", fontsize=18, fontweight="bold", ha="left", va="center")
+    ax_header.text(0.0, 0.18, subject_name, fontsize=10, color="#4b5563", ha="left", va="center")
+
+    ax_summary = fig.add_axes([0.07, 0.80, 0.42, 0.10])
+    ax_summary.axis("off")
+    summary_rows = [
+        f"Season: {season_display}",
+        f"Confidence: {confidence:.1%}",
+        f"Temperature: {axes.get('temp', 0.0):.3f}",
+        f"Value: {axes.get('value', 0.0):.3f}",
+        f"Chroma: {axes.get('chroma', 0.0):.3f}",
+        f"Contrast: {axes.get('contrast', 0.0):.3f}",
+    ]
+    ax_summary.text(0.0, 1.0, "Summary Metrics", fontsize=12, fontweight="bold", ha="left", va="top")
+    for i, row in enumerate(summary_rows):
+        ax_summary.text(0.0, 0.82 - i * 0.15, row, fontsize=9.5, ha="left", va="top")
+
+    ax_palette = fig.add_axes([0.53, 0.80, 0.40, 0.10])
+    ax_palette.set_xlim(0, 1)
+    ax_palette.set_ylim(0, 1)
+    ax_palette.axis("off")
+    ax_palette.text(0.0, 1.0, "Palette", fontsize=12, fontweight="bold", ha="left", va="top")
+    if palette_hex:
+        sw = min(0.12, 0.86 / max(1, len(palette_hex)))
+        for i, hx in enumerate(palette_hex[:7]):
+            x = 0.01 + i * (sw + 0.01)
+            ax_palette.add_patch(Rectangle((x, 0.42), sw, 0.32, facecolor=hx, edgecolor="#cfcfcf", linewidth=0.8))
+            ax_palette.text(x + sw / 2.0, 0.35, hx, fontsize=6.5, ha="center", va="top")
+    else:
+        ax_palette.text(0.0, 0.62, "n/a", fontsize=9, ha="left", va="center")
+
+    ax_photo = fig.add_axes([0.07, 0.56, 0.28, 0.21])
+    ax_photo.axis("off")
+    ax_photo.text(0.0, 1.03, "Input Photo", fontsize=12, fontweight="bold", ha="left", va="bottom")
+    if input_rgb is not None:
+        thumb_h = 240
+        src_h, src_w = input_rgb.shape[:2]
+        if src_h > 0 and src_w > 0:
+            thumb_w = max(1, int(round((src_w / src_h) * thumb_h)))
+            thumb = cv2.resize(input_rgb, (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
+        else:
+            thumb = input_rgb
+        ax_photo.imshow(thumb)
+        ax_photo.set_aspect("equal")
+    else:
+        ax_photo.text(0.0, 0.5, "n/a", fontsize=9, ha="left", va="center")
+
+    ax_dynamic = fig.add_axes([0.07, 0.33, 0.86, 0.17])
+    ax_dynamic.set_xlim(0, 1)
+    ax_dynamic.set_ylim(0, 1)
+    ax_dynamic.axis("off")
+    ax_dynamic.text(0.0, 1.02, "Dynamic Best Colours", fontsize=12, fontweight="bold", ha="left", va="top")
+    dyn = dynamic_suggestions.get("colors", [])
+    cols = 4
+    rows = 2
+    card_w = 0.23
+    card_h = 0.42
+    x_gap = 0.015
+    y_rows = [0.54, 0.08]
+    for i, item in enumerate(dyn[: cols * rows]):
+        r = i // cols
+        c = i % cols
+        x0 = 0.01 + c * (card_w + x_gap)
+        y0 = y_rows[r]
+        ax_dynamic.add_patch(Rectangle((x0, y0), card_w, card_h, facecolor="#fafafa", edgecolor="#e2e2e2", linewidth=0.8))
+        hx = item.get("hex", "#999999")
+        ax_dynamic.add_patch(Rectangle((x0 + 0.012, y0 + 0.20), 0.07, 0.16, facecolor=hx, edgecolor="#cfcfcf", linewidth=0.8))
+        ax_dynamic.text(
+            x0 + 0.09,
+            y0 + 0.33,
+            str(item.get("label", item.get("name", ""))),
+            fontsize=7.6,
+            fontweight="bold",
+            ha="left",
+            va="center",
+        )
+        ax_dynamic.text(x0 + 0.09, y0 + 0.23, hx, fontsize=7.2, family="monospace", ha="left", va="center")
+        reason = textwrap.fill(str(item.get("reason", "")), width=30)
+        ax_dynamic.text(x0 + 0.012, y0 + 0.17, reason, fontsize=6.8, ha="left", va="top")
+    ax_dynamic.text(
+        0.0,
+        0.0,
+        "These shades are computed from your measured warmth, depth, saturation, and contrast.",
+        fontsize=7.0,
+        color="#444444",
+        ha="left",
+        va="bottom",
+    )
+
+    ax_notes = fig.add_axes([0.07, 0.06, 0.86, 0.24])
+    ax_notes.axis("off")
+    ax_notes.text(0.0, 1.0, "Text Suggestions", fontsize=12, fontweight="bold", ha="left", va="top")
+    y = 0.9
+    headline = str(text_suggestions.get("headline", "")).strip()
+    if headline:
+        for seg in textwrap.wrap(headline, width=108)[:2]:
+            ax_notes.text(0.0, y, seg, fontsize=8.7, fontweight="bold", ha="left", va="top")
+            y -= 0.06
+
+    blocks = text_suggestions.get("blocks", []) if isinstance(text_suggestions, dict) else []
+    for block in blocks:
+        title = str(block.get("title", "")).strip()
+        if title and y >= 0.06:
+            ax_notes.text(0.0, y, title, fontsize=8.3, fontweight="bold", ha="left", va="top")
+            y -= 0.055
+        text = str(block.get("text", "")).strip()
+        if text and y >= 0.06:
+            for seg in textwrap.wrap(text, width=110)[:2]:
+                ax_notes.text(0.0, y, seg, fontsize=8.0, ha="left", va="top")
+                y -= 0.05
+                if y < 0.03:
+                    break
+        bullets = block.get("bullets", [])
+        if isinstance(bullets, list):
+            for bullet in bullets[:6]:
+                for idx, seg in enumerate(textwrap.wrap(str(bullet), width=106)[:2]):
+                    prefix = "- " if idx == 0 else "  "
+                    ax_notes.text(0.0, y, f"{prefix}{seg}", fontsize=7.9, ha="left", va="top")
+                    y -= 0.048
+                    if y < 0.03:
+                        break
+                if y < 0.03:
+                    break
+        if y < 0.03:
+            break
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="pdf", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
 uploads = st.file_uploader(
     "Upload photos",
     type=["jpg", "jpeg", "png"],
@@ -341,58 +692,10 @@ uploads = st.file_uploader(
 
 palettes = load_palettes(Path("assets/palettes/seasonal_palettes.json"))
 palette_meta = load_palette_metadata(Path("assets/palettes/seasonal_palettes.json"))
-recommendations = load_recommendations(Path("assets/palettes/seasonal_recommendations.json"))
-season_descriptions = load_season_descriptions(Path("assets/palettes/season_descriptions.json"))
 calibration_params = load_calibration_params("calibration_params.json")
-
-season_to_reco_key = {
-    "Autumn": "Warm Autumn (A)",
-    "Summer": "Cool Summer (B)",
-    "Winter": "Cool Winter (C)",
-    "Spring": "Warm Spring (D)",
-}
-code_to_reco_key = {
-    "A": "Warm Autumn (A)",
-    "B": "Cool Summer (B)",
-    "C": "Cool Winter (C)",
-    "D": "Warm Spring (D)",
-}
-
-
-def _recommendation_key_for_variant(variant_key: str, palette_code: str, base_season: str) -> str | None:
-    if variant_key in recommendations:
-        return variant_key
-    if palette_code in code_to_reco_key:
-        return code_to_reco_key[palette_code]
-    return season_to_reco_key.get(base_season)
-
-
-def _render_recommendation_block(block: dict, as_note: bool = False) -> None:
-    title = block.get("title")
-    description = block.get("description")
-    if title:
-        st.markdown(f"**{title}**" if as_note else title)
-    if description:
-        st.markdown(description)
-
-    def render_list(label: str, items: list | None) -> None:
-        if not items:
-            return
-        bullets = "\n".join(f"- {item}" for item in items)
-        st.markdown(f"**{label}**\n{bullets}")
-
-    render_list("Best colors", block.get("best_colors"))
-    render_list("Best neutrals", block.get("best_neutrals"))
-    render_list("Metals", block.get("metals"))
-    render_list("Avoid", block.get("avoid"))
-
-    overall = block.get("overall_effect")
-    if overall:
-        st.markdown(f"**Overall effect**: {overall}")
-
-    style_note = block.get("style_note")
-    if style_note:
-        st.markdown(f"**Style note**: {style_note}")
+dynamic_color_config = load_dynamic_color_config("dynamic_colors_config.json")
+dynamic_color_config_json = json.dumps(dynamic_color_config, sort_keys=True)
+dynamic_color_cfg_hash = config_hash(dynamic_color_config)
 
 if uploads:
     summary_slot = st.empty()
@@ -407,9 +710,12 @@ if uploads:
     per_image_confidences: list[float] = []
     per_image_quality_weights: list[float] = []
     per_image_axes: list[dict[str, float]] = []
+    per_image_payloads: list[dict] = []
     gallery_items: list[tuple[str, np.ndarray, bool]] = []
     diagnostics_records: list[dict] = []
     first_valid_image = None
+    first_valid_regions = None
+    first_valid_skin_features = None
     skipped = {"decode_failed": 0, "no_face": 0, "weak_sample": 0, "quality_excluded": 0}
 
     for upload in uploads:
@@ -427,6 +733,7 @@ if uploads:
             continue
 
         image_rgb = result["image_rgb"]
+        image_hash = str(result.get("image_hash", ""))
         if status == "no_face":
             if show_per_image:
                 st.info("No face was detected in this image. Try a clearer, front-facing photo with good lighting.")
@@ -462,6 +769,8 @@ if uploads:
         valid_skin_chroma_vars.append(skin_chroma_var)
         if first_valid_image is None:
             first_valid_image = image_rgb
+            first_valid_regions = regions
+            first_valid_skin_features = features
 
         region_diag = compute_region_diagnostics(image_rgb, regions.landmarks_px, features)
         hair_features = region_diag.hair_features
@@ -531,7 +840,6 @@ if uploads:
             contrast_score=decision.contrast_score,
         )
         season_display = f"{variant_decision.base_season} → {variant_decision.variant_key}"
-        variant_description = season_descriptions.get(variant_decision.variant_key, {})
         palette_season = _palette_season_from_variant(
             variant_decision.base_season,
             variant_decision.variant_key,
@@ -554,14 +862,65 @@ if uploads:
             per_image_quality_weights.append(float(features.sample_count) * max(0.05, quality_score))
         else:
             per_image_quality_weights.append(float(features.sample_count))
+        axes_payload = (
+            float(decision.temp_score),
+            float(decision.value_score),
+            float(decision.chroma_score),
+            float(decision.contrast_score),
+        )
+        dynamic_mode = "advanced" if use_advanced_dynamic else "simple"
+        _dyn_t0 = time.perf_counter()
+        dynamic_suggestions = compute_dynamic_color_suggestions(
+            image_hash=image_hash,
+            axes_payload=axes_payload,
+            mode=dynamic_mode,
+            cfg_hash=dynamic_color_cfg_hash,
+            return_set=True,
+            cfg_json=dynamic_color_config_json,
+            season_hint=final_season,
+            image_rgb=image_rgb if dynamic_mode == "advanced" else None,
+            regions=regions if dynamic_mode == "advanced" else None,
+            baseline_skin=features if dynamic_mode == "advanced" else None,
+            diagnostics=show_diagnostics,
+        )
+        dynamic_elapsed_s = time.perf_counter() - _dyn_t0
+        analysis_payload = {
+            "axes": {
+                "temp": float(decision.temp_score),
+                "value": float(decision.value_score),
+                "chroma": float(decision.chroma_score),
+                "contrast": float(decision.contrast_score),
+            },
+            "season_logits": {
+                "baseline": z_base_adj,
+                "drape": z_drape_map,
+                "calibrated": z_cal_map,
+            },
+            "drape_penalties": drape_eval.drape_metrics,
+            "dynamic_color_suggestions": dynamic_suggestions,
+        }
+        per_image_payloads.append(analysis_payload)
         gallery_items.append((upload.name, image_rgb, bool(result.get("wb_applied", False))))
         season_colors = palette_for_season(palettes, palette_season)
-        draped = render_drape_strip(image_rgb, season_colors)
+        draped = _compose_personalised_drape_preview(image_rgb, dynamic_suggestions, strip_height=92)
+        text_suggestions = render_text_suggestions(
+            _build_copy_payload(
+                image_id=image_hash,
+                season_display=season_display,
+                top1_season=final_season,
+                top2_season=second_season,
+                top1_variant=variant_decision.variant_key,
+                confidence=float(conf),
+                axes=analysis_payload["axes"],
+                dynamic_suggestions=dynamic_suggestions,
+            ),
+            COPY_RULES_PATH,
+        )
 
         if show_per_image:
             c1, c2 = st.columns([2, 1])
             with c1:
-                st.image(draped, caption=f"Digital drape ({final_season})", use_container_width=True)
+                st.image(draped, caption="Personalised drape strip", use_container_width=True)
                 if show_debug:
                     dbg = render_debug_overlay(image_rgb, regions)
                     dbg = render_diagnostics_overlay(dbg, region_diag.hair_mask, region_diag.iris_mask)
@@ -583,32 +942,7 @@ if uploads:
                 st.subheader(season_display)
                 st.caption(f"Confidence: {conf:.0%}")
                 st.markdown("</div>", unsafe_allow_html=True)
-
-                top1, top2 = final_season, second_season
-                if conf < 0.65:
-                    st.warning(f"Close call between {top1} and {top2}.")
-                    top1_variant = choose_variant(top1, decision.temp_score, decision.chroma_score, decision.contrast_score)
-                    top2_variant = choose_variant(top2, decision.temp_score, decision.chroma_score, decision.contrast_score)
-                    top1_palette = palette_for_season(
-                        palettes,
-                        _palette_season_from_variant(top1_variant.base_season, top1_variant.variant_key, top1_variant.palette_code),
-                    )
-                    top2_palette = palette_for_season(
-                        palettes,
-                        _palette_season_from_variant(top2_variant.base_season, top2_variant.variant_key, top2_variant.palette_code),
-                    )
-                    pa, pb = st.columns(2)
-                    with pa:
-                        st.caption(f"{top1_variant.base_season} → {top1_variant.variant_key}")
-                        st.code(", ".join(top1_palette) if top1_palette else "No palette colors found.")
-                    with pb:
-                        st.caption(f"{top2_variant.base_season} → {top2_variant.variant_key}")
-                        st.code(", ".join(top2_palette) if top2_palette else "No palette colors found.")
-                    st.caption("Tie-breaker checks")
-                    for bullet in LOW_CONF_TIEBREAKER_BULLETS:
-                        st.write(f"- {bullet}")
-                else:
-                    st.caption(f"Top season: {top1}")
+                st.caption(f"Top season: {final_season}")
 
                 st.pyplot(plot_season_scores([z_cal_map[s] for s in SEASONS], list(SEASONS)), use_container_width=True)
 
@@ -644,9 +978,33 @@ if uploads:
                     st.metric(AXIS_LABELS["value"], f"{decision.value_score:.2f}", help=AXIS_HELP["value"])
                     st.metric(AXIS_LABELS["contrast"], f"{decision.contrast_score:.2f}", help=AXIS_HELP["contrast"])
 
-                if variant_description:
-                    st.write("**Style Guidance**")
-                    _render_recommendation_block(variant_description)
+                st.write("**Text Suggestions**")
+                _render_text_suggestions_section(text_suggestions)
+                _render_dynamic_best_colours(
+                    title="Your Dynamic Best Colours",
+                    suggestions=dynamic_suggestions,
+                    axes_used=analysis_payload["axes"],
+                    show_diag=show_diagnostics,
+                )
+                if dynamic_mode == "advanced" and dynamic_elapsed_s > 0.5:
+                    st.caption(f"Advanced optimisation time: {dynamic_elapsed_s:.2f}s")
+                scorecard_pdf = _build_scorecard_pdf_bytes(
+                    subject_name=upload.name,
+                    season_display=season_display,
+                    confidence=float(conf),
+                    axes=analysis_payload["axes"],
+                    palette_hex=season_colors,
+                    dynamic_suggestions=dynamic_suggestions,
+                    text_suggestions=text_suggestions,
+                    input_rgb=image_rgb,
+                )
+                st.download_button(
+                    "Download scorecard (PDF)",
+                    data=scorecard_pdf,
+                    file_name=f"scorecard_{Path(upload.name).stem}.pdf",
+                    mime="application/pdf",
+                    key=f"scorecard_{image_hash[:12]}",
+                )
 
                 if show_diagnostics:
                     with st.expander("Diagnostics", expanded=False):
@@ -788,6 +1146,33 @@ if uploads:
             composite_variant.palette_code,
         )
         composite_colors = palette_for_season(palettes, composite_palette_season)
+        composite_dynamic_mode = "advanced" if use_advanced_dynamic else "simple"
+        composite_axes = {
+            "temp": float(composite_axis_decision.temp_score),
+            "value": float(composite_axis_decision.value_score),
+            "chroma": float(composite_axis_decision.chroma_score),
+            "contrast": float(composite_axis_decision.contrast_score),
+        }
+        _comp_dyn_t0 = time.perf_counter()
+        composite_dynamic_suggestions = compute_dynamic_color_suggestions(
+            image_hash="composite::" + "|".join(sorted(name for name, _, _ in gallery_items)),
+            axes_payload=(
+                composite_axes["temp"],
+                composite_axes["value"],
+                composite_axes["chroma"],
+                composite_axes["contrast"],
+            ),
+            mode=composite_dynamic_mode,
+            cfg_hash=dynamic_color_cfg_hash,
+            return_set=True,
+            cfg_json=dynamic_color_config_json,
+            season_hint=composite_season,
+            image_rgb=first_valid_image if composite_dynamic_mode == "advanced" else None,
+            regions=first_valid_regions if composite_dynamic_mode == "advanced" else None,
+            baseline_skin=first_valid_skin_features if composite_dynamic_mode == "advanced" else None,
+            diagnostics=show_diagnostics,
+        )
+        composite_dynamic_elapsed_s = time.perf_counter() - _comp_dyn_t0
 
         with summary_slot.container():
             st.subheader("Composite across images")
@@ -799,10 +1184,8 @@ if uploads:
             with c1:
                 if first_valid_image is not None:
                     st.image(
-                        render_drape_strip(first_valid_image, composite_colors)
-                        if composite_colors
-                        else first_valid_image,
-                        caption=f"Composite digital drape ({composite_season}, using first valid photo)",
+                        _compose_personalised_drape_preview(first_valid_image, composite_dynamic_suggestions, strip_height=92),
+                        caption="Personalised drape strip (composite)",
                         use_container_width=True,
                     )
             with c2:
@@ -842,48 +1225,21 @@ if uploads:
                 st.write(f"**Base season**: {composite_variant.base_season}")
                 st.write(f"**Variant**: {composite_variant.variant_key}")
                 st.write(f"**Palette hex list**: {', '.join(composite_colors) if composite_colors else 'n/a'}")
-                composite_variant_description = season_descriptions.get(composite_variant.variant_key, {})
-                if composite_variant_description:
-                    st.write("**Variant description**")
-                    _render_recommendation_block(composite_variant_description)
-                if composite_confidence < 0.65:
-                    comp_top1 = composite_season
-                    comp_top2 = composite_second
-                    comp_top1_variant = choose_variant(
-                        comp_top1,
-                        composite_axis_decision.temp_score,
-                        composite_axis_decision.chroma_score,
-                        composite_axis_decision.contrast_score,
-                    )
-                    comp_top2_variant = choose_variant(
-                        comp_top2,
-                        composite_axis_decision.temp_score,
-                        composite_axis_decision.chroma_score,
-                        composite_axis_decision.contrast_score,
-                    )
-                    comp_top1_palette = palette_for_season(
-                        palettes,
-                        _palette_season_from_variant(
-                            comp_top1_variant.base_season,
-                            comp_top1_variant.variant_key,
-                            comp_top1_variant.palette_code,
-                        ),
-                    )
-                    comp_top2_palette = palette_for_season(
-                        palettes,
-                        _palette_season_from_variant(
-                            comp_top2_variant.base_season,
-                            comp_top2_variant.variant_key,
-                            comp_top2_variant.palette_code,
-                        ),
-                    )
-                    st.warning(f"Close call between {comp_top1} and {comp_top2}.")
-                    st.write(f"- {comp_top1_variant.base_season} → {comp_top1_variant.variant_key}")
-                    st.code(", ".join(comp_top1_palette) if comp_top1_palette else "No palette colors found.")
-                    st.write(f"- {comp_top2_variant.base_season} → {comp_top2_variant.variant_key}")
-                    st.code(", ".join(comp_top2_palette) if comp_top2_palette else "No palette colors found.")
-                    for bullet in LOW_CONF_TIEBREAKER_BULLETS:
-                        st.write(f"- {bullet}")
+                composite_text_suggestions = render_text_suggestions(
+                    _build_copy_payload(
+                        image_id="composite",
+                        season_display=composite_season_display,
+                        top1_season=composite_season,
+                        top2_season=composite_second,
+                        top1_variant=composite_variant.variant_key,
+                        confidence=float(composite_confidence),
+                        axes=composite_axes,
+                        dynamic_suggestions=composite_dynamic_suggestions,
+                    ),
+                    COPY_RULES_PATH,
+                )
+                st.write("**Text Suggestions**")
+                _render_text_suggestions_section(composite_text_suggestions)
 
                 am1, am2 = st.columns(2)
                 with am1:
@@ -906,6 +1262,31 @@ if uploads:
                         st.write(_fmt_feature("Skin", composite_features))
                         st.write(_fmt_feature("Hair", composite_hair))
                         st.write(_fmt_feature("Iris", composite_iris))
+                _render_dynamic_best_colours(
+                    title="Your Dynamic Best Colours",
+                    suggestions=composite_dynamic_suggestions,
+                    axes_used=composite_axes,
+                    show_diag=show_diagnostics,
+                )
+                if composite_dynamic_mode == "advanced" and composite_dynamic_elapsed_s > 0.5:
+                    st.caption(f"Advanced optimisation time: {composite_dynamic_elapsed_s:.2f}s")
+                composite_scorecard_pdf = _build_scorecard_pdf_bytes(
+                    subject_name="Composite across images",
+                    season_display=composite_season_display,
+                    confidence=float(composite_confidence),
+                    axes=composite_axes,
+                    palette_hex=composite_colors,
+                    dynamic_suggestions=composite_dynamic_suggestions,
+                    text_suggestions=composite_text_suggestions,
+                    input_rgb=first_valid_image,
+                )
+                st.download_button(
+                    "Download composite scorecard (PDF)",
+                    data=composite_scorecard_pdf,
+                    file_name="scorecard_composite.pdf",
+                    mime="application/pdf",
+                    key="scorecard_composite",
+                )
                 st.write("**Composite palette (hex)**")
                 st.code(", ".join(composite_colors) if composite_colors else "No palette colors found.")
                 composite_info = palette_meta.get(composite_season, {})
@@ -913,26 +1294,6 @@ if uploads:
                 if description:
                     st.write("**Composite overview**")
                     st.markdown(description)
-
-                rec_key = _recommendation_key_for_variant(
-                    composite_variant.variant_key,
-                    composite_variant.palette_code,
-                    composite_variant.base_season,
-                )
-                rec_payload = recommendations.get(rec_key, {}) if rec_key else {}
-                primary = rec_payload.get("primary")
-                strong = rec_payload.get("strong")
-                borderline = rec_payload.get("borderline")
-                if primary or strong or borderline:
-                    st.write("**Composite recommendations**")
-                    if primary:
-                        _render_recommendation_block(primary)
-                    if strong:
-                        st.write("**Notes: strong**")
-                        _render_recommendation_block(strong, as_note=True)
-                    if borderline:
-                        st.write("**Notes: borderline**")
-                        _render_recommendation_block(borderline, as_note=True)
 
             if any(skipped.values()):
                 st.caption(
