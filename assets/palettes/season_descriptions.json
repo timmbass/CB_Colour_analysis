@@ -1,0 +1,82 @@
+{
+  "Warm Spring (D)": {
+    "title": "Warm Spring (D) - Fresh, Warm, Clear",
+    "description": "You read warm and bright overall. Clear warm colors add healthy energy and keep skin looking lively.",
+    "best_colors": ["Coral", "Peach", "Warm turquoise", "Tomato red"],
+    "best_neutrals": ["Cream", "Camel", "Warm navy"],
+    "metals": ["Gold", "Rose gold"],
+    "avoid": ["Dusty cool mauves", "Ashy greys"],
+    "overall_effect": "Luminous and vibrant",
+    "style_note": "Keep contrast medium-high with warm accents."
+  },
+  "Neutral Spring (D)": {
+    "title": "Neutral Spring (D) - Warm-leaning, Balanced Brightness",
+    "description": "You are spring-like but can be overwhelmed by very hot, very saturated tones. Balanced warm-bright shades work best.",
+    "best_colors": ["Apricot", "Soft coral", "Warm mint", "Light teal"],
+    "best_neutrals": ["Soft cream", "Light camel", "Warm taupe"],
+    "metals": ["Light gold"],
+    "avoid": ["Very icy cool colors", "Heavy charcoal"],
+    "overall_effect": "Fresh and harmonious",
+    "style_note": "Use one bright accent with softer warm supports."
+  },
+  "Warm Autumn (A)": {
+    "title": "Warm Autumn (A) - Rich, Earthy, Golden",
+    "description": "You support warmth and depth. Earth-based tones create cohesion and natural polish.",
+    "best_colors": ["Rust", "Terracotta", "Olive", "Mustard"],
+    "best_neutrals": ["Chocolate", "Warm khaki", "Camel"],
+    "metals": ["Gold", "Bronze"],
+    "avoid": ["Icy pastels", "Blue-based magenta"],
+    "overall_effect": "Grounded and rich",
+    "style_note": "Layer textured warm neutrals for depth."
+  },
+  "Soft Autumn (A)": {
+    "title": "Soft Autumn (A) - Muted Warmth",
+    "description": "You are warm but better in softened, blended tones than in intense saturation.",
+    "best_colors": ["Muted rust", "Soft olive", "Dusty peach", "Warm sage"],
+    "best_neutrals": ["Mushroom", "Warm grey-brown", "Soft camel"],
+    "metals": ["Antique gold"],
+    "avoid": ["Neon brights", "Icy black-white contrast"],
+    "overall_effect": "Subtle, refined warmth",
+    "style_note": "Favor tonal combinations over sharp contrast."
+  },
+  "Cool Summer (B)": {
+    "title": "Cool Summer (B) - Cool, Soft, Elegant",
+    "description": "Cool undertones with balanced softness. Refined, blended cool shades look naturally flattering.",
+    "best_colors": ["Dusty rose", "Periwinkle", "Soft plum", "Slate blue"],
+    "best_neutrals": ["Soft grey", "Cool taupe", "Navy"],
+    "metals": ["Silver", "White gold"],
+    "avoid": ["Orange-reds", "Warm mustard"],
+    "overall_effect": "Polished and graceful",
+    "style_note": "Keep transitions smooth and moderately low contrast."
+  },
+  "Soft Summer (B)": {
+    "title": "Soft Summer (B) - Muted Cool",
+    "description": "You suit cool hues with extra softness and lower contrast.",
+    "best_colors": ["Mauve", "Smoky blue", "Muted berry", "Soft teal"],
+    "best_neutrals": ["Stone", "Dove grey", "Soft navy"],
+    "metals": ["Brushed silver"],
+    "avoid": ["Clear warm brights", "Very stark black/white"],
+    "overall_effect": "Gentle and sophisticated",
+    "style_note": "Prioritize muted cool palettes with low-medium contrast."
+  },
+  "Cool Winter (C)": {
+    "title": "Cool Winter (C) - Clear, Cool, High Definition",
+    "description": "You handle cool clarity and strong contrast well. Crisp cool tones create impact.",
+    "best_colors": ["Cobalt", "Fuchsia", "Emerald", "True red (blue-based)"],
+    "best_neutrals": ["Black", "Optic white", "Charcoal"],
+    "metals": ["Silver", "Platinum"],
+    "avoid": ["Earthy yellow-browns", "Muted warm beige"],
+    "overall_effect": "Striking and defined",
+    "style_note": "Use clean contrast and saturated cool accents."
+  },
+  "Bright Winter (C)": {
+    "title": "Bright Winter (C) - High Contrast, Vivid Cool",
+    "description": "You support especially strong contrast and high chroma cool colors.",
+    "best_colors": ["Electric blue", "Hot pink", "Clear magenta", "Bright emerald"],
+    "best_neutrals": ["True black", "Pure white"],
+    "metals": ["Polished silver"],
+    "avoid": ["Dusty muted tones", "Warm olive-browns"],
+    "overall_effect": "High-energy clarity",
+    "style_note": "Lean into vivid cool color with crisp value contrast."
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "Warm Autumn (A)": {
+    "primary": {
+      "title": "Warm Autumn - Rich, Earthy, Golden",
+      "description": "You have a warm, golden undertone with natural depth and richness. Earthy, autumnal shades create harmony and bring out warmth in your complexion.",
+      "best_colors": [
+        "Olive",
+        "Moss green",
+        "Burnt orange",
+        "Rust",
+        "Cinnamon",
+        "Deep golden red",
+        "Muted teal"
+      ],
+      "best_neutrals": [
+        "Warm brown",
+        "Camel",
+        "Chocolate",
+        "Cream (instead of white)",
+        "Deep olive"
+      ],
+      "metals": [
+        "Yellow gold",
+        "Bronze",
+        "Burnished gold"
+      ],
+      "avoid": [
+        "Icy pastels",
+        "Cool greys",
+        "Blue-based pinks",
+        "Stark black and white contrast"
+      ],
+      "overall_effect": "Warm, luxurious, natural, softly dramatic."
+    },
+    "strong": {
+      "title": "Strong Warm Autumn - Deep & Defined",
+      "description": "Your undertone and depth are clearly warm and rich. Deep earthy tones will consistently enhance your complexion. Layered warm neutrals and textured fabrics will feel especially elevated.",
+      "style_note": "Lean into depth and richness. Avoid high contrast black/white combinations."
+    },
+    "borderline": {
+      "title": "Between Autumn & Spring - Warm with Lift",
+      "description": "You show warmth with moderate brightness. You may enjoy both soft rust tones and brighter coral accents. Try pairing one muted earthy shade with one fresher warm accent.",
+      "style_note": "Experiment with warmth first, then adjust brightness level."
+    }
+  },
+  "Cool Summer (B)": {
+    "primary": {
+      "title": "Cool Summer - Soft, Elegant, Refined",
+      "description": "You have cool undertones with a naturally soft, slightly muted quality. Dusty, blended tones create elegance and harmony around your face.",
+      "best_colors": [
+        "Powder blue",
+        "Steel blue",
+        "Lavender",
+        "Soft plum",
+        "Dusty rose",
+        "Slate grey"
+      ],
+      "best_neutrals": [
+        "Soft grey",
+        "Cool taupe",
+        "Muted navy",
+        "Charcoal (soft)"
+      ],
+      "metals": [
+        "Silver",
+        "Brushed silver",
+        "White gold"
+      ],
+      "avoid": [
+        "Mustard",
+        "Orange-based reds",
+        "Very bright neon shades",
+        "Harsh black"
+      ],
+      "overall_effect": "Graceful, polished, effortlessly chic."
+    },
+    "strong": {
+      "title": "Strong Cool Summer - Pure Soft Cool",
+      "description": "Your colouring strongly favours cool and muted tones. Harmonious, blended outfits will look intentional and refined. Sharp contrast may overpower you.",
+      "style_note": "Keep outfits cohesive and softly blended rather than high-contrast."
+    },
+    "borderline": {
+      "title": "Between Summer & Winter - Cool with Flexibility",
+      "description": "You lean cool but may handle slightly stronger tones. Try both soft slate shades and occasional jewel accents to see which feels most balanced.",
+      "style_note": "Test contrast levels gradually."
+    }
+  },
+  "Cool Winter (C)": {
+    "primary": {
+      "title": "Cool Winter - Bold, High Contrast, Striking",
+      "description": "Your colouring supports clear, saturated, cool tones. Strong contrast and vivid hues enhance your natural clarity.",
+      "best_colors": [
+        "True red",
+        "Cobalt blue",
+        "Magenta",
+        "Emerald",
+        "Teal"
+      ],
+      "best_neutrals": [
+        "Jet black",
+        "Stark white",
+        "Charcoal",
+        "Deep navy"
+      ],
+      "metals": [
+        "Platinum",
+        "Bright silver",
+        "White gold"
+      ],
+      "avoid": [
+        "Muted earthy tones",
+        "Dusty pastels",
+        "Warm oranges",
+        "Golden browns"
+      ],
+      "overall_effect": "Confident, sharp, dramatic, modern."
+    },
+    "strong": {
+      "title": "Strong Cool Winter - High Impact",
+      "description": "You handle bold colour exceptionally well. Clear, saturated tones and strong contrast will energise your appearance. Black is likely one of your strongest neutrals.",
+      "style_note": "Do not shy away from vivid statement colours."
+    },
+    "borderline": {
+      "title": "Cool with Moderate Contrast",
+      "description": "You lean cool but may not require extreme contrast. Test mid-tone jewel shades alongside darker neutrals to find your sweet spot.",
+      "style_note": "Balance clarity with softness."
+    }
+  },
+  "Warm Spring (D)": {
+    "primary": {
+      "title": "Warm Spring - Fresh, Bright, Luminous",
+      "description": "You have a warm undertone with natural brightness. Clear, lively colours bring warmth and energy to your complexion.",
+      "best_colors": [
+        "Coral",
+        "Turquoise",
+        "Bright yellow",
+        "Fresh green",
+        "Warm pink",
+        "Salmon"
+      ],
+      "best_neutrals": [
+        "Cream",
+        "Light camel",
+        "Warm beige",
+        "Soft navy"
+      ],
+      "metals": [
+        "Yellow gold",
+        "Polished gold"
+      ],
+      "avoid": [
+        "Heavy dark shades",
+        "Cool dusty greys",
+        "Deep burgundy"
+      ],
+      "overall_effect": "Radiant, playful, glowing, fresh."
+    },
+    "strong": {
+      "title": "Strong Warm Spring - Bright & Clear",
+      "description": "You benefit from brightness and warmth together. Fresh, clear colours will instantly lift your complexion.",
+      "style_note": "Keep colours lively and avoid overly muted palettes."
+    },
+    "borderline": {
+      "title": "Warm with Moderate Brightness",
+      "description": "Your undertone is warm but not extremely bright. Try balancing softer warm neutrals with one lively accent shade.",
+      "style_note": "Adjust brightness level based on how vibrant you prefer to feel."
+    }
+  }
+}

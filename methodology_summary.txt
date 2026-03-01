@@ -1,0 +1,72 @@
+Methodology Summary: Mathematics Used in the Streamlit Color Analysis App
+
+1) Face-region geometry (sampling domain)
+- A single face is detected with MediaPipe Face Landmarker.
+- 468 normalized landmarks (x, y in [0,1]) are converted to pixel coordinates:
+  x_px = x_norm * image_width, y_px = y_norm * image_height.
+- Two fixed landmark index sets define left/right cheek polygons.
+- Binary cheek masks are created by polygon rasterization (filled polygons). Analysis pixels are all RGB pixels where mask > 0.
+
+2) Color-space transform and Lab normalization
+- Cheek RGB pixels are converted to CIE Lab using OpenCV.
+- OpenCV's encoded Lab is converted to an analysis-friendly scale:
+  L* = L_openCV * (100/255)
+  a* = a_openCV - 128
+  b* = b_openCV - 128
+- This puts L* roughly on [0,100], and centers a*/b* around 0.
+
+3) Robust statistics on sampled skin pixels
+- All pixels from both cheeks are combined.
+- Quality gate 1: require at least min_samples = 500 total pixels.
+- To reduce outliers from glare/shadow, pixels are trimmed by lightness:
+  keep pixels with L* between the 10th and 90th percentiles.
+- Quality gate 2: after trimming, require at least max(100, min_samples/3) pixels.
+- Final feature vector uses medians (robust to outliers):
+  L_med = median(L*_kept)
+  a_med = median(a*_kept)
+  b_med = median(b*_kept)
+- Chroma (color vividness) is Euclidean magnitude in the a*-b* plane:
+  chroma = sqrt(a_med^2 + b_med^2)
+
+4) Rule-based seasonal classification
+- Three scalar thresholds:
+  warm_b_threshold = 3.0
+  bright_chroma_threshold = 18.0
+  light_l_threshold = 58.0
+- Boolean attributes:
+  is_warm = (b* >= 3.0)
+  is_bright = (chroma >= 18.0)
+  is_light = (L* >= 58.0)
+- Season mapping uses undertone + clarity:
+  warm + bright  -> Spring
+  warm + muted   -> Autumn
+  cool + bright  -> Winter
+  cool + muted   -> Summer
+- Depth (light/deep) does not change the base season mapping; it is used for confidence adjustment.
+
+5) Confidence score (distance-from-threshold heuristic)
+- Distances from thresholds are normalized and clipped:
+  dist_b = min(|b* - 3.0| / 12.0, 1.0)
+  dist_c = min(|chroma - 18.0| / 20.0, 1.0)
+  dist_l = min(|L* - 58.0| / 20.0, 1.0)
+- Base confidence:
+  conf = 0.5 + 0.49 * ((dist_b + dist_c + dist_l) / 3)
+- Canonical depth expectation:
+  Spring/Summer expected light, Autumn/Winter expected deep.
+  If observed depth conflicts, subtract 0.08 from confidence.
+- Final clamp:
+  conf = clip(conf, 0.5, 0.99)
+- Note: this is an explainability heuristic, not a calibrated probability.
+
+6) Multi-image composite math
+- If multiple valid images are uploaded, each image-level feature vector is weighted by usable pixel count.
+- Weighted means:
+  L*_comp = weighted_mean(L*_i, w_i)
+  a*_comp = weighted_mean(a*_i, w_i)
+  b*_comp = weighted_mean(b*_i, w_i)
+  where w_i = sample_count_i.
+- Composite chroma:
+  chroma_comp = sqrt(a*_comp^2 + b*_comp^2)
+- Composite sample count is the sum of per-image usable pixels.
+- The same season rules and confidence equations are then applied to the composite features.
+
