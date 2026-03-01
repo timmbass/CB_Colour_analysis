@@ -241,6 +241,16 @@ def _normalize_axis(raw: float, axis_name: str) -> float:
     return float(np.clip(z, -2.0, 2.0) / 2.0)
 
 
+def _season_accent_color(season: str) -> str:
+    palette = {
+        "Spring": "#f39c12",
+        "Summer": "#4a90c2",
+        "Autumn": "#b5653c",
+        "Winter": "#2f4f8f",
+    }
+    return palette.get(season, "#1f77b4")
+
+
 def _hist_chart(values: list[float], title: str, x_label: str, threshold: float | None = None) -> None:
     if not values:
         st.write(f"{title}: no data")
@@ -617,6 +627,7 @@ if uploads:
                         y_map,
                         AXIS_LABELS["temperature"],
                         AXIS_LABELS[y_label_key],
+                        point_color=_season_accent_color(final_season),
                     ),
                     use_container_width=True,
                 )
@@ -824,6 +835,7 @@ if uploads:
                         AXIS_LABELS[y_key],
                         x_unc=x_unc,
                         y_unc=y_unc,
+                        point_color=_season_accent_color(composite_season),
                     ),
                     use_container_width=True,
                 )
