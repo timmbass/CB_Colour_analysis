@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -61,6 +62,7 @@ from ui.sidebar import render_sidebar_controls
 from ui.styles import apply_base_styles
 
 logger = logging.getLogger(__name__)
+RUN_STARTED_AT = time.perf_counter()
 
 st.set_page_config(page_title="Personal Color Analysis", layout="wide")
 apply_base_styles()
@@ -90,12 +92,61 @@ wb_method = _sidebar.wb_method
 
 @st.cache_resource
 def get_face_detector() -> FaceMeshDetector:
-    return FaceMeshDetector(static_image_mode=True, max_num_faces=1)
+    started_at = time.perf_counter()
+    logger.warning("face detector init start")
+    detector = FaceMeshDetector(static_image_mode=True, max_num_faces=1)
+    logger.warning("face detector init done elapsed_s=%.3f", time.perf_counter() - started_at)
+    return detector
 
 
-@st.cache_data(show_spinner=False)
+def _get_analysis_cache() -> dict[tuple[str, str], dict]:
+    cache = st.session_state.get("_analysis_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state["_analysis_cache"] = cache
+    return cache
+
+
 def analyze_image(file_bytes: bytes, wb_method_choice: str) -> dict:
-    return analyze_image_bytes(file_bytes, wb_method_choice, get_face_detector()).as_payload()
+    started_at = time.perf_counter()
+    result = analyze_image_bytes(file_bytes, wb_method_choice, get_face_detector()).as_payload()
+    logger.warning(
+        "analyze_image fresh status=%s hash=%s elapsed_s=%.3f bytes=%d wb=%s",
+        result.get("status"),
+        str(result.get("image_hash", ""))[:12],
+        time.perf_counter() - started_at,
+        len(file_bytes),
+        wb_method_choice,
+    )
+    return result
+
+
+def get_or_analyze_image(file_bytes: bytes, wb_method_choice: str) -> dict:
+    cache = _get_analysis_cache()
+    started_at = time.perf_counter()
+    image_key = hashlib.sha256(file_bytes).hexdigest()
+    cache_key = (image_key, wb_method_choice)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.warning(
+            "analysis cache hit status=%s hash=%s elapsed_s=%.3f wb=%s",
+            cached.get("status"),
+            image_key[:12],
+            time.perf_counter() - started_at,
+            wb_method_choice,
+        )
+        return cached
+
+    result = analyze_image(file_bytes, wb_method_choice)
+    cache[cache_key] = result
+    logger.warning(
+        "analysis cache store status=%s hash=%s total_elapsed_s=%.3f wb=%s",
+        result.get("status"),
+        image_key[:12],
+        time.perf_counter() - started_at,
+        wb_method_choice,
+    )
+    return result
 
 
 def aggregate_features(feature_list: list[ColorFeatures]) -> ColorFeatures:
@@ -407,6 +458,218 @@ def _build_scorecard_pdf_bytes(
         input_rgb=input_rgb,
     )
 
+
+def _get_pipeline_cache() -> dict[tuple[object, ...], dict]:
+    cache = st.session_state.get("_image_pipeline_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state["_image_pipeline_cache"] = cache
+    return cache
+
+
+def get_or_compute_image_pipeline(
+    *,
+    upload_name: str,
+    result: dict,
+    palettes,
+    calibration_params: dict,
+    dynamic_color_cfg_hash: str,
+    dynamic_color_config_json: str,
+    use_advanced_dynamic: bool,
+    show_diagnostics: bool,
+) -> dict:
+    dynamic_mode = "advanced" if use_advanced_dynamic else "simple"
+    calibration_hash = hashlib.sha256(json.dumps(calibration_params, sort_keys=True).encode("utf-8")).hexdigest()
+    cache_key = (
+        str(result.get("image_hash", "")),
+        upload_name,
+        dynamic_mode,
+        bool(show_diagnostics),
+        calibration_hash,
+        dynamic_color_cfg_hash,
+    )
+    cache = _get_pipeline_cache()
+    started_at = time.perf_counter()
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.warning(
+            "image pipeline cache hit hash=%s elapsed_s=%.3f mode=%s",
+            str(result.get("image_hash", ""))[:12],
+            time.perf_counter() - started_at,
+            dynamic_mode,
+        )
+        return cached
+
+    image_rgb = result["image_rgb"]
+    image_hash = str(result.get("image_hash", ""))
+    regions = result["regions"]
+    features = result["features"]
+    skin_chroma_var = float(result.get("skin_chroma_var", 0.0))
+    region_diag = compute_region_diagnostics(image_rgb, regions.landmarks_px, features)
+    hair_features = region_diag.hair_features
+    iris_features = region_diag.iris_features
+    skin_mask = ((regions.left_mask > 0) | (regions.right_mask > 0)).astype(np.uint8)
+    definition_score = compute_definition_score(image_rgb, region_diag.iris_mask, skin_mask)
+
+    delta_l_hair_skin = abs(hair_features.l - features.l) if hair_features is not None else None
+    delta_l_iris_skin = abs(iris_features.l - features.l) if iris_features is not None else None
+    decision = classify_season(
+        skin_features=features,
+        hair_features=hair_features,
+        iris_features=iris_features,
+        delta_l_hair_skin=delta_l_hair_skin,
+        delta_l_iris_skin=delta_l_iris_skin,
+        skin_chroma_variance=skin_chroma_var,
+        definition_score=definition_score,
+    )
+    drape_eval = evaluate_drape_scores(
+        image_rgb=image_rgb,
+        regions=regions,
+        baseline_skin=features,
+        baseline_scores=decision.season_scores,
+        palettes=palettes,
+        baseline_weight=0.6,
+        drape_weight=0.4,
+    )
+    z_base_vec = np.array([decision.season_scores[s] for s in SEASONS], dtype=np.float64)
+    z_drape_vec = np.array([drape_eval.drape_scores[s] for s in SEASONS], dtype=np.float64)
+    stress_delta = cool_stress_delta(drape_eval.drape_metrics)
+    stress_nudge = summer_winter_nudge(stress_delta, scale=10.0)
+    z_base_vec[SEASON_TO_IDX["Winter"]] += stress_nudge
+    z_base_vec[SEASON_TO_IDX["Summer"]] -= stress_nudge
+
+    alpha = float(calibration_params.get("alpha", 0.5))
+    bias = calibration_params.get("bias", [0.0, 0.0, 0.0, 0.0])
+    gamma = float(calibration_params.get("gamma", 3.0))
+    z_cal_vec = apply_calibration(z_base_vec, z_drape_vec, alpha=alpha, bias=bias)
+    conf, top1_idx, top2_idx, margin = margin_confidence(z_cal_vec, gamma=gamma)
+    topk = predict_topk(z_cal_vec, k=2)
+    final_season = IDX_TO_SEASON[top1_idx]
+    second_season = IDX_TO_SEASON[top2_idx]
+    z_base_adj = {s: float(z_base_vec[i]) for i, s in enumerate(SEASONS)}
+    z_drape_map = {s: float(z_drape_vec[i]) for i, s in enumerate(SEASONS)}
+    z_cal_map = {s: float(z_cal_vec[i]) for i, s in enumerate(SEASONS)}
+
+    variant_decision = choose_variant(
+        base_season=final_season,
+        temp_score=decision.temp_score,
+        chroma_score=decision.chroma_score,
+        contrast_score=decision.contrast_score,
+    )
+    season_display = f"{variant_decision.base_season} → {variant_decision.variant_key}"
+    palette_season = _palette_season_from_variant(
+        variant_decision.base_season,
+        variant_decision.variant_key,
+        variant_decision.palette_code,
+    )
+    axes_payload = (
+        float(decision.temp_score),
+        float(decision.value_score),
+        float(decision.chroma_score),
+        float(decision.contrast_score),
+    )
+    dynamic_started_at = time.perf_counter()
+    dynamic_suggestions = compute_dynamic_color_suggestions(
+        image_hash=image_hash,
+        axes_payload=axes_payload,
+        mode=dynamic_mode,
+        cfg_hash=dynamic_color_cfg_hash,
+        return_set=True,
+        cfg_json=dynamic_color_config_json,
+        season_hint=final_season,
+        image_rgb=image_rgb if dynamic_mode == "advanced" else None,
+        regions=regions if dynamic_mode == "advanced" else None,
+        baseline_skin=features if dynamic_mode == "advanced" else None,
+        diagnostics=show_diagnostics,
+    )
+    dynamic_elapsed_s = time.perf_counter() - dynamic_started_at
+    analysis_payload = {
+        "axes": {
+            "temp": float(decision.temp_score),
+            "value": float(decision.value_score),
+            "chroma": float(decision.chroma_score),
+            "contrast": float(decision.contrast_score),
+        },
+        "season_logits": {
+            "baseline": z_base_adj,
+            "drape": z_drape_map,
+            "calibrated": z_cal_map,
+        },
+        "drape_penalties": drape_eval.drape_metrics,
+        "dynamic_color_suggestions": dynamic_suggestions,
+    }
+    season_colors = palette_for_season(palettes, palette_season)
+    draped = _compose_personalised_drape_preview(image_rgb, dynamic_suggestions, strip_height=92)
+    text_suggestions = render_text_suggestions(
+        _build_copy_payload(
+            image_id=image_hash,
+            season_display=season_display,
+            top1_season=final_season,
+            top2_season=second_season,
+            top1_variant=variant_decision.variant_key,
+            confidence=float(conf),
+            axes=analysis_payload["axes"],
+            dynamic_suggestions=dynamic_suggestions,
+        ),
+        COPY_RULES_PATH,
+    )
+    scorecard_pdf = _build_scorecard_pdf_bytes(
+        subject_name=upload_name,
+        season_display=season_display,
+        confidence=float(conf),
+        axes=analysis_payload["axes"],
+        palette_hex=season_colors,
+        dynamic_suggestions=dynamic_suggestions,
+        text_suggestions=text_suggestions,
+        input_rgb=image_rgb,
+    )
+    pipeline = {
+        "analysis_payload": analysis_payload,
+        "conf": float(conf),
+        "decision": decision,
+        "definition_score": float(definition_score),
+        "delta_l_hair_skin": delta_l_hair_skin,
+        "delta_l_iris_skin": delta_l_iris_skin,
+        "drape_eval": drape_eval,
+        "draped": draped,
+        "dynamic_elapsed_s": dynamic_elapsed_s,
+        "dynamic_mode": dynamic_mode,
+        "dynamic_suggestions": dynamic_suggestions,
+        "features": features,
+        "final_season": final_season,
+        "hair_features": hair_features,
+        "iris_features": iris_features,
+        "margin": float(margin),
+        "palette_season": palette_season,
+        "region_diag": region_diag,
+        "scorecard_pdf": scorecard_pdf,
+        "season_colors": season_colors,
+        "season_display": season_display,
+        "second_season": second_season,
+        "skin_chroma_var": skin_chroma_var,
+        "stress_delta": float(stress_delta),
+        "stress_nudge": float(stress_nudge),
+        "text_suggestions": text_suggestions,
+        "top_drape_colors": [c.color_hex for c in drape_eval.season_details[drape_eval.best_season].colors[:4]],
+        "topk": topk,
+        "variant_decision": variant_decision,
+        "z_base_adj": z_base_adj,
+        "z_base_vec": z_base_vec,
+        "z_cal_map": z_cal_map,
+        "z_cal_vec": z_cal_vec,
+        "z_drape_map": z_drape_map,
+        "z_drape_vec": z_drape_vec,
+    }
+    cache[cache_key] = pipeline
+    logger.warning(
+        "image pipeline cache store hash=%s elapsed_s=%.3f mode=%s",
+        image_hash[:12],
+        time.perf_counter() - started_at,
+        dynamic_mode,
+    )
+    return pipeline
+
+
 uploads = st.file_uploader(
     "Upload photos",
     type=["jpg", "jpeg", "png"],
@@ -421,6 +684,16 @@ dynamic_color_config_json = json.dumps(dynamic_color_config, sort_keys=True)
 dynamic_color_cfg_hash = config_hash(dynamic_color_config)
 
 if uploads:
+    logger.warning(
+        "rerun start uploads=%d wb=%s show_per_image=%s show_debug=%s show_drape_previews=%s diagnostics=%s advanced_dynamic=%s",
+        len(uploads),
+        wb_method,
+        show_per_image,
+        show_debug,
+        show_drape_previews,
+        show_diagnostics,
+        use_advanced_dynamic,
+    )
     summary_slot = st.empty()
     valid_features: list[ColorFeatures] = []
     valid_skin_chroma_vars: list[float] = []
@@ -446,7 +719,8 @@ if uploads:
             st.divider()
             st.subheader(upload.name)
 
-        result = analyze_image(upload.read(), wb_method)
+        file_bytes = upload.getvalue()
+        result = get_or_analyze_image(file_bytes, wb_method)
         status = result["status"]
 
         if status == "decode_failed":
@@ -495,18 +769,27 @@ if uploads:
             first_valid_regions = regions
             first_valid_skin_features = features
 
-        region_diag = compute_region_diagnostics(image_rgb, regions.landmarks_px, features)
-        hair_features = region_diag.hair_features
-        iris_features = region_diag.iris_features
-        skin_mask = ((regions.left_mask > 0) | (regions.right_mask > 0)).astype(np.uint8)
-        definition_score = compute_definition_score(image_rgb, region_diag.iris_mask, skin_mask)
+        pipeline = get_or_compute_image_pipeline(
+            upload_name=upload.name,
+            result=result,
+            palettes=palettes,
+            calibration_params=calibration_params,
+            dynamic_color_cfg_hash=dynamic_color_cfg_hash,
+            dynamic_color_config_json=dynamic_color_config_json,
+            use_advanced_dynamic=use_advanced_dynamic,
+            show_diagnostics=show_diagnostics,
+        )
+        region_diag = pipeline["region_diag"]
+        hair_features = pipeline["hair_features"]
+        iris_features = pipeline["iris_features"]
+        definition_score = float(pipeline["definition_score"])
         if hair_features is not None:
             valid_hair_features.append(hair_features)
         if iris_features is not None:
             valid_iris_features.append(iris_features)
 
-        delta_l_hair_skin = abs(hair_features.l - features.l) if hair_features is not None else None
-        delta_l_iris_skin = abs(iris_features.l - features.l) if iris_features is not None else None
+        delta_l_hair_skin = pipeline["delta_l_hair_skin"]
+        delta_l_iris_skin = pipeline["delta_l_iris_skin"]
         diagnostics_records.append(
             {
                 "image": upload.name,
@@ -519,59 +802,35 @@ if uploads:
             }
         )
 
-        decision = classify_season(
-            skin_features=features,
-            hair_features=hair_features,
-            iris_features=iris_features,
-            delta_l_hair_skin=delta_l_hair_skin,
-            delta_l_iris_skin=delta_l_iris_skin,
-            skin_chroma_variance=skin_chroma_var,
-            definition_score=definition_score,
-        )
-        drape_eval = evaluate_drape_scores(
-            image_rgb=image_rgb,
-            regions=regions,
-            baseline_skin=features,
-            baseline_scores=decision.season_scores,
-            palettes=palettes,
-            baseline_weight=0.6,
-            drape_weight=0.4,
-        )
-        z_base_vec = np.array([decision.season_scores[s] for s in SEASONS], dtype=np.float64)
-        z_drape_vec = np.array([drape_eval.drape_scores[s] for s in SEASONS], dtype=np.float64)
-        stress_delta = cool_stress_delta(drape_eval.drape_metrics)
-        stress_nudge = summer_winter_nudge(stress_delta, scale=10.0)
-        z_base_vec[SEASON_TO_IDX["Winter"]] += stress_nudge
-        z_base_vec[SEASON_TO_IDX["Summer"]] -= stress_nudge
-
-        alpha = float(calibration_params.get("alpha", 0.5))
-        bias = calibration_params.get("bias", [0.0, 0.0, 0.0, 0.0])
-        gamma = float(calibration_params.get("gamma", 3.0))
-        z_cal_vec = apply_calibration(z_base_vec, z_drape_vec, alpha=alpha, bias=bias)
-        conf, top1_idx, top2_idx, margin = margin_confidence(z_cal_vec, gamma=gamma)
-        topk = predict_topk(z_cal_vec, k=2)
-        final_season = IDX_TO_SEASON[top1_idx]
-        second_season = IDX_TO_SEASON[top2_idx]
-        z_base_adj = {s: float(z_base_vec[i]) for i, s in enumerate(SEASONS)}
-        z_drape_map = {s: float(z_drape_vec[i]) for i, s in enumerate(SEASONS)}
-        z_cal_map = {s: float(z_cal_vec[i]) for i, s in enumerate(SEASONS)}
-
-        variant_decision = choose_variant(
-            base_season=final_season,
-            temp_score=decision.temp_score,
-            chroma_score=decision.chroma_score,
-            contrast_score=decision.contrast_score,
-        )
-        season_display = f"{variant_decision.base_season} → {variant_decision.variant_key}"
-        palette_season = _palette_season_from_variant(
-            variant_decision.base_season,
-            variant_decision.variant_key,
-            variant_decision.palette_code,
-        )
+        decision = pipeline["decision"]
+        drape_eval = pipeline["drape_eval"]
+        z_base_vec = pipeline["z_base_vec"]
+        z_drape_vec = pipeline["z_drape_vec"]
+        stress_delta = float(pipeline["stress_delta"])
+        stress_nudge = float(pipeline["stress_nudge"])
+        z_base_adj = pipeline["z_base_adj"]
+        z_drape_map = pipeline["z_drape_map"]
+        z_cal_map = pipeline["z_cal_map"]
+        z_cal_vec = pipeline["z_cal_vec"]
+        conf = float(pipeline["conf"])
+        margin = float(pipeline["margin"])
+        topk = pipeline["topk"]
+        final_season = pipeline["final_season"]
+        second_season = pipeline["second_season"]
+        variant_decision = pipeline["variant_decision"]
+        season_display = pipeline["season_display"]
+        season_colors = pipeline["season_colors"]
+        draped = pipeline["draped"]
+        text_suggestions = pipeline["text_suggestions"]
+        dynamic_suggestions = pipeline["dynamic_suggestions"]
+        dynamic_elapsed_s = float(pipeline["dynamic_elapsed_s"])
+        dynamic_mode = pipeline["dynamic_mode"]
+        analysis_payload = pipeline["analysis_payload"]
+        scorecard_pdf = pipeline["scorecard_pdf"]
         per_image_final_scores.append(z_cal_map)
         per_image_baseline_scores.append(z_base_adj)
         per_image_drape_scores.append(z_drape_map)
-        per_image_confidences.append(float(conf))
+        per_image_confidences.append(conf)
         valid_definition_scores.append(float(definition_score))
         per_image_axes.append(
             {
@@ -585,60 +844,8 @@ if uploads:
             per_image_quality_weights.append(float(features.sample_count) * max(0.05, quality_score))
         else:
             per_image_quality_weights.append(float(features.sample_count))
-        axes_payload = (
-            float(decision.temp_score),
-            float(decision.value_score),
-            float(decision.chroma_score),
-            float(decision.contrast_score),
-        )
-        dynamic_mode = "advanced" if use_advanced_dynamic else "simple"
-        _dyn_t0 = time.perf_counter()
-        dynamic_suggestions = compute_dynamic_color_suggestions(
-            image_hash=image_hash,
-            axes_payload=axes_payload,
-            mode=dynamic_mode,
-            cfg_hash=dynamic_color_cfg_hash,
-            return_set=True,
-            cfg_json=dynamic_color_config_json,
-            season_hint=final_season,
-            image_rgb=image_rgb if dynamic_mode == "advanced" else None,
-            regions=regions if dynamic_mode == "advanced" else None,
-            baseline_skin=features if dynamic_mode == "advanced" else None,
-            diagnostics=show_diagnostics,
-        )
-        dynamic_elapsed_s = time.perf_counter() - _dyn_t0
-        analysis_payload = {
-            "axes": {
-                "temp": float(decision.temp_score),
-                "value": float(decision.value_score),
-                "chroma": float(decision.chroma_score),
-                "contrast": float(decision.contrast_score),
-            },
-            "season_logits": {
-                "baseline": z_base_adj,
-                "drape": z_drape_map,
-                "calibrated": z_cal_map,
-            },
-            "drape_penalties": drape_eval.drape_metrics,
-            "dynamic_color_suggestions": dynamic_suggestions,
-        }
         per_image_payloads.append(analysis_payload)
         gallery_items.append((upload.name, image_rgb, bool(result.get("wb_applied", False))))
-        season_colors = palette_for_season(palettes, palette_season)
-        draped = _compose_personalised_drape_preview(image_rgb, dynamic_suggestions, strip_height=92)
-        text_suggestions = render_text_suggestions(
-            _build_copy_payload(
-                image_id=image_hash,
-                season_display=season_display,
-                top1_season=final_season,
-                top2_season=second_season,
-                top1_variant=variant_decision.variant_key,
-                confidence=float(conf),
-                axes=analysis_payload["axes"],
-                dynamic_suggestions=dynamic_suggestions,
-            ),
-            COPY_RULES_PATH,
-        )
 
         if show_per_image:
             c1, c2 = st.columns([2, 1])
@@ -652,7 +859,7 @@ if uploads:
                 if show_drape_previews:
                     winner = drape_eval.best_season
                     st.write(f"**Top drape previews ({winner})**")
-                    top_colors = [c.color_hex for c in drape_eval.season_details[winner].colors[:4]]
+                    top_colors = pipeline["top_drape_colors"]
                     if top_colors:
                         cols = st.columns(len(top_colors))
                         for col, color_hex in zip(cols, top_colors):
@@ -711,16 +918,6 @@ if uploads:
                 )
                 if dynamic_mode == "advanced" and dynamic_elapsed_s > 0.5:
                     st.caption(f"Advanced optimisation time: {dynamic_elapsed_s:.2f}s")
-                scorecard_pdf = _build_scorecard_pdf_bytes(
-                    subject_name=upload.name,
-                    season_display=season_display,
-                    confidence=float(conf),
-                    axes=analysis_payload["axes"],
-                    palette_hex=season_colors,
-                    dynamic_suggestions=dynamic_suggestions,
-                    text_suggestions=text_suggestions,
-                    input_rgb=image_rgb,
-                )
                 st.download_button(
                     "Download scorecard (PDF)",
                     data=scorecard_pdf,
@@ -740,9 +937,11 @@ if uploads:
                         st.write(f"- top2 idx/logit: `{[(i, round(v, 4)) for i, v in topk]}`")
                         st.write(f"- calibrated margin(top1-top2): `{margin:.4f}`")
                         st.write(f"- calibrated conf: `{conf:.4f}`")
-                        st.write(f"- calibration alpha: `{alpha:.3f}`")
-                        st.write(f"- calibration gamma: `{gamma:.3f}`")
-                        st.write(f"- calibration bias: `{[round(float(x), 4) for x in bias]}`")
+                        st.write(f"- calibration alpha: `{float(calibration_params.get('alpha', 0.5)):.3f}`")
+                        st.write(f"- calibration gamma: `{float(calibration_params.get('gamma', 3.0)):.3f}`")
+                        st.write(
+                            f"- calibration bias: `{[round(float(x), 4) for x in calibration_params.get('bias', [0.0, 0.0, 0.0, 0.0])]}`"
+                        )
                         st.write(f"- quality_score: `{quality_score:.3f}`")
                         st.write(f"- definition_score: `{definition_score:.3f}`")
                         st.write(f"- cool_stress_delta: `{stress_delta:.3f}`")
@@ -1026,5 +1225,12 @@ if uploads:
                     f"{skipped['weak_sample']} weak samples, "
                     f"{skipped['quality_excluded']} quality-excluded."
                 )
+    logger.warning(
+        "rerun done valid_images=%d skipped=%s elapsed_s=%.3f",
+        len(valid_features),
+        skipped,
+        time.perf_counter() - RUN_STARTED_AT,
+    )
 else:
     st.caption("Upload at least one image to start analysis.")
+    logger.warning("rerun done uploads=0 elapsed_s=%.3f", time.perf_counter() - RUN_STARTED_AT)
