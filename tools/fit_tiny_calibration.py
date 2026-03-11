@@ -10,8 +10,6 @@ from pathlib import Path
 
 import numpy as np
 
-from src.calibration import apply_calibration, margin_confidence
-
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
     z = logits - np.max(logits, axis=1, keepdims=True)

@@ -10,13 +10,16 @@ from __future__ import annotations
 import colorsys
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from src.config import load_dynamic_color_config
 from src.drape_scoring import prepare_color_drape_context, score_color_drape
+from src.paths import DYNAMIC_COLORS_CONFIG_PATH, resolve_repo_path
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "dynamic_colors_config.json"
+DEFAULT_CONFIG_PATH = DYNAMIC_COLORS_CONFIG_PATH
 
 
 @dataclass(frozen=True)
@@ -37,9 +40,8 @@ def clip11(x: float) -> float:
 
 
 def load_dynamic_colors_config(path: str | Path | None = None) -> dict[str, Any]:
-    cfg_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
-    with cfg_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    cfg_path = resolve_repo_path(path) if path is not None else DEFAULT_CONFIG_PATH
+    return load_dynamic_color_config(cfg_path)
 
 
 def config_hash(config: dict[str, Any]) -> str:

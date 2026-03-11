@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
 from src.color_features import ColorFeatures
+from src.config import load_analysis_config
 from src.season_index import SEASONS
 
 
@@ -33,49 +33,47 @@ def _sigmoid(x: float) -> float:
 
 
 def _axis_temp_score(skin: ColorFeatures) -> float:
-    # Requested formulation:
-    # hue = atan2(b, a)
-    # cool_score = sigmoid(-b + k1 * a)
-    # warm_score = sigmoid( b - k2 * a)
-    # axis score in [-1, 1] from warm-cool difference.
+    cfg = load_analysis_config()["season_rules"]["temp"]
     _hue = float(np.arctan2(skin.b, skin.a))
-    k1 = 0.20
-    k2 = 0.20
-    scale = 0.20
+    k1 = float(cfg["k1"])
+    k2 = float(cfg["k2"])
+    scale = float(cfg["scale"])
     cool_score = _sigmoid(scale * (-skin.b + k1 * skin.a))
     warm_score = _sigmoid(scale * (skin.b - k2 * skin.a))
     return _clip_axis(warm_score - cool_score)
 
 
-def _axis_value_score(skin: ColorFeatures, hair: Optional[ColorFeatures]) -> float:
-    # Lightness from skin L* plus relative skin-vs-hair lightness if available.
-    skin_light = np.tanh((skin.l - 58.0) / 12.0)
+def _axis_value_score(skin: ColorFeatures, hair: ColorFeatures | None) -> float:
+    cfg = load_analysis_config()["season_rules"]["value"]
+    skin_light = np.tanh((skin.l - float(cfg["skin_center"])) / float(cfg["skin_scale"]))
     if hair is None:
         return _clip_axis(float(skin_light))
-    rel = skin.l - hair.l  # larger => hair darker than skin => deeper
-    rel_light = -np.tanh(rel / 18.0)
+    rel = skin.l - hair.l
+    rel_light = -np.tanh(rel / float(cfg["hair_delta_scale"]))
     return _clip_axis(float(0.7 * skin_light + 0.3 * rel_light))
 
 
 def _axis_chroma_score(skin: ColorFeatures, skin_chroma_variance: float) -> float:
-    # Higher skin chroma => brighter; higher variance penalizes clarity.
-    chroma_base = np.tanh((skin.chroma - 18.0) / 8.0)
+    cfg = load_analysis_config()["season_rules"]["chroma"]
+    chroma_base = np.tanh((skin.chroma - float(cfg["center"])) / float(cfg["scale"]))
     chroma_std = np.sqrt(max(0.0, skin_chroma_variance))
-    var_penalty = np.tanh((chroma_std - 6.0) / 4.0)
+    var_penalty = np.tanh((chroma_std - float(cfg["variance_center"])) / float(cfg["variance_scale"]))
     return _clip_axis(float(0.8 * chroma_base - 0.2 * var_penalty))
 
 
-def _axis_contrast_score(delta_l_hair_skin: Optional[float], delta_l_iris_skin: Optional[float]) -> float:
-    # Contrast from hair/iris vs skin lightness separation.
+def _axis_contrast_score(delta_l_hair_skin: float | None, delta_l_iris_skin: float | None) -> float:
+    cfg = load_analysis_config()["season_rules"]["contrast"]
     if delta_l_hair_skin is None and delta_l_iris_skin is None:
         return 0.0
     if delta_l_hair_skin is None:
+        assert delta_l_iris_skin is not None
         c_raw = float(delta_l_iris_skin)
     elif delta_l_iris_skin is None:
+        assert delta_l_hair_skin is not None
         c_raw = float(delta_l_hair_skin)
     else:
         c_raw = 0.6 * float(delta_l_hair_skin) + 0.4 * float(delta_l_iris_skin)
-    return _clip_axis(float(np.tanh((c_raw - 16.0) / 8.0)))
+    return _clip_axis(float(np.tanh((c_raw - float(cfg["center"])) / float(cfg["scale"]))))
 
 
 def _season_compatibility(
@@ -92,10 +90,10 @@ def _season_compatibility(
 
 def classify_season(
     skin_features: ColorFeatures,
-    hair_features: Optional[ColorFeatures] = None,
-    iris_features: Optional[ColorFeatures] = None,
-    delta_l_hair_skin: Optional[float] = None,
-    delta_l_iris_skin: Optional[float] = None,
+    hair_features: ColorFeatures | None = None,
+    iris_features: ColorFeatures | None = None,
+    delta_l_hair_skin: float | None = None,
+    delta_l_iris_skin: float | None = None,
     skin_chroma_variance: float = 0.0,
     definition_score: float = 0.0,
 ) -> SeasonDecision:
@@ -114,23 +112,19 @@ def classify_season(
         "chroma": chroma_score,
         "contrast": contrast_score,
     }
-    weights = {"temp": 0.35, "value": 0.25, "chroma": 0.25, "contrast": 0.15}
-    targets = {
-        "Spring": {"temp": 0.95, "value": 0.75, "chroma": 0.85, "contrast": 0.45},
-        "Summer": {"temp": -0.95, "value": 0.55, "chroma": -0.75, "contrast": -0.25},
-        "Autumn": {"temp": 0.95, "value": -0.35, "chroma": -0.65, "contrast": 0.15},
-        "Winter": {"temp": -0.95, "value": -0.35, "chroma": 0.85, "contrast": 0.90},
-    }
+    cfg = load_analysis_config()["season_rules"]
+    weights = {key: float(value) for key, value in cfg["weights"].items()}
+    targets = {season: {key: float(value) for key, value in target.items()} for season, target in cfg["targets"].items()}
 
     season_scores = {
         season: _season_compatibility(axes, target, weights) for season, target in targets.items()
     }
 
-    # Edge-definition adjustment: subtle boosts on cool seasons.
+    adjustments = cfg["definition_adjustments"]
     if definition_score > 0.0 and contrast_score > 0.0:
-        season_scores["Winter"] += 0.08 * definition_score * contrast_score
+        season_scores["Winter"] += float(adjustments["winter_boost"]) * definition_score * contrast_score
     if definition_score < 0.0 and contrast_score < 0.0:
-        season_scores["Summer"] += 0.08 * abs(definition_score) * abs(contrast_score)
+        season_scores["Summer"] += float(adjustments["summer_boost"]) * abs(definition_score) * abs(contrast_score)
 
     ordered = sorted(season_scores.items(), key=lambda kv: kv[1], reverse=True)
     top_season, _ = ordered[0]

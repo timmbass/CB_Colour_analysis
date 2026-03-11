@@ -2,7 +2,6 @@ from pathlib import Path
 
 from src.copy_renderer import band_for, load_copy_rules, render_text_suggestions
 
-
 RULES_PATH = Path("assets/copy_rules.v1.json")
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import cv2
 import mediapipe as mp
@@ -12,6 +11,7 @@ import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+from src.paths import FACE_LANDMARKER_PATH
 
 # Stable cheek-region landmark sets for MediaPipe FaceMesh (468 landmarks).
 LEFT_CHEEK_IDX = [50, 187, 205, 207, 213, 192, 147, 123, 116, 117, 118]
@@ -32,10 +32,10 @@ class FaceMeshDetector:
         self,
         static_image_mode: bool = True,
         max_num_faces: int = 1,
-        model_path: Optional[Path] = None,
+        model_path: Path | None = None,
     ) -> None:
         _ = static_image_mode
-        model_path = model_path or (Path(__file__).resolve().parents[1] / "assets" / "models" / "face_landmarker.task")
+        model_path = model_path or FACE_LANDMARKER_PATH
         base_options = python.BaseOptions(model_asset_path=str(model_path))
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
@@ -46,7 +46,7 @@ class FaceMeshDetector:
         )
         self._detector = vision.FaceLandmarker.create_from_options(options)
 
-    def detect_single_face(self, image_rgb: np.ndarray) -> Optional[np.ndarray]:
+    def detect_single_face(self, image_rgb: np.ndarray) -> np.ndarray | None:
         """Return (468,2) pixel landmarks for one face, or None if not found."""
         h, w = image_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
@@ -62,13 +62,13 @@ class FaceMeshDetector:
         self._detector.close()
 
 
-def _poly_from_indices(landmarks_px: np.ndarray, indices: List[int]) -> np.ndarray:
+def _poly_from_indices(landmarks_px: np.ndarray, indices: list[int]) -> np.ndarray:
     poly = landmarks_px[indices]
     return np.round(poly).astype(np.int32)
 
 
 def build_region_masks(
-    image_shape: Tuple[int, int, int], landmarks_px: np.ndarray
+    image_shape: tuple[int, int, int], landmarks_px: np.ndarray
 ) -> FaceRegionResult:
     """Build cheek polygons + masks from landmarks."""
     h, w = image_shape[:2]

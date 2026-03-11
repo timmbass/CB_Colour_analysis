@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import cv2
 import numpy as np
 
 
-def decode_uploaded_image(file_bytes: bytes) -> Optional[np.ndarray]:
+def decode_uploaded_image(file_bytes: bytes) -> np.ndarray | None:
     """Decode uploaded file bytes into an RGB image."""
     if not file_bytes:
         return None

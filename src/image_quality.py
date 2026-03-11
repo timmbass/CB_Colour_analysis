@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import cv2
 import numpy as np
+
+from src.config import load_analysis_config
 
 
 def _clip01(x: float) -> float:
@@ -18,8 +18,11 @@ def evaluate_image_quality(
     landmarks_px: np.ndarray,
     left_mask: np.ndarray,
     right_mask: np.ndarray,
-    cheek_kept_count: Optional[int] = None,
+    cheek_kept_count: int | None = None,
 ) -> dict:
+    cfg = load_analysis_config()["image_quality"]
+    score_weights = cfg["score_weights"]
+    score_ranges = cfg["score_ranges"]
     h, w = image_rgb.shape[:2]
     img_area = float(max(h * w, 1))
 
@@ -63,26 +66,33 @@ def evaluate_image_quality(
         cast_imbalance = float((np.max(means) - np.min(means)) / (np.mean(means) + 1e-6))
 
     reasons: list[str] = []
-    if face_ratio < 0.08:
+    if face_ratio < float(cfg["tiny_face_ratio"]):
         reasons.append("tiny_face")
-    if effective_cheek_count < 450:
+    if effective_cheek_count < int(cfg["low_cheek_sample"]):
         reasons.append("low_cheek_sample")
-    if over_pct > 35.0:
+    if over_pct > float(cfg["overexposed_pct"]):
         reasons.append("overexposed_cheeks")
-    if under_pct > 35.0:
+    if under_pct > float(cfg["underexposed_pct"]):
         reasons.append("underexposed_cheeks")
-    if blur_var < 70.0:
+    if blur_var < float(cfg["blur_laplacian_var"]):
         reasons.append("blurry_face")
-    if cast_imbalance > 0.38:
+    if cast_imbalance > float(cfg["strong_color_cast_pre_wb"]):
         reasons.append("strong_color_cast_pre_wb")
 
-    s_face = _clip01((face_ratio - 0.03) / 0.17)
-    s_cheek = _clip01((effective_cheek_count - 300.0) / 1200.0)
-    s_over = 1.0 - _clip01((over_pct - 8.0) / 40.0)
-    s_under = 1.0 - _clip01((under_pct - 8.0) / 40.0)
-    s_blur = _clip01((blur_var - 35.0) / 220.0)
-    s_cast = 1.0 - _clip01((cast_imbalance - 0.08) / 0.35)
-    score = float(0.22 * s_face + 0.20 * s_cheek + 0.14 * s_over + 0.14 * s_under + 0.20 * s_blur + 0.10 * s_cast)
+    s_face = _clip01((face_ratio - float(score_ranges["face"][0])) / float(score_ranges["face"][1]))
+    s_cheek = _clip01((effective_cheek_count - float(score_ranges["cheek"][0])) / float(score_ranges["cheek"][1]))
+    s_over = 1.0 - _clip01((over_pct - float(score_ranges["over"][0])) / float(score_ranges["over"][1]))
+    s_under = 1.0 - _clip01((under_pct - float(score_ranges["under"][0])) / float(score_ranges["under"][1]))
+    s_blur = _clip01((blur_var - float(score_ranges["blur"][0])) / float(score_ranges["blur"][1]))
+    s_cast = 1.0 - _clip01((cast_imbalance - float(score_ranges["cast"][0])) / float(score_ranges["cast"][1]))
+    score = float(
+        float(score_weights["face"]) * s_face
+        + float(score_weights["cheek"]) * s_cheek
+        + float(score_weights["over"]) * s_over
+        + float(score_weights["under"]) * s_under
+        + float(score_weights["blur"]) * s_blur
+        + float(score_weights["cast"]) * s_cast
+    )
 
     return {
         "score": score,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -25,9 +24,9 @@ def _extract_masked_pixels(image_rgb: np.ndarray, mask: np.ndarray) -> np.ndarra
 def compute_robust_lab_from_pixels(
     pixels: np.ndarray,
     min_samples: int = 500,
-    trim_percentiles: Tuple[float, float] = (10.0, 90.0),
-    min_kept_samples: Optional[int] = None,
-) -> Optional[ColorFeatures]:
+    trim_percentiles: tuple[float, float] = (10.0, 90.0),
+    min_kept_samples: int | None = None,
+) -> ColorFeatures | None:
     """Compute robust median Lab features from an RGB pixel array."""
     if pixels.size == 0 or pixels.shape[0] < min_samples:
         return None
@@ -59,7 +58,7 @@ def compute_robust_lab_features(
     left_mask: np.ndarray,
     right_mask: np.ndarray,
     min_samples: int = 500,
-) -> Optional[ColorFeatures]:
+) -> ColorFeatures | None:
     """Compute robust median Lab values from both cheek regions."""
     pixels_left = _extract_masked_pixels(image_rgb, left_mask)
     pixels_right = _extract_masked_pixels(image_rgb, right_mask)
@@ -76,7 +75,7 @@ def compute_skin_chroma_variance(
     left_mask: np.ndarray,
     right_mask: np.ndarray,
     min_samples: int = 200,
-) -> Optional[float]:
+) -> float | None:
     """Compute variance of skin chroma from trimmed cheek pixels."""
     pixels_left = _extract_masked_pixels(image_rgb, left_mask)
     pixels_right = _extract_masked_pixels(image_rgb, right_mask)

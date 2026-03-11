@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import cv2
 import numpy as np
 
 from src.color_features import ColorFeatures, compute_robust_lab_features
+from src.config import load_analysis_config
 from src.face_regions import FaceRegionResult
 from src.season_index import SEASONS
 
@@ -40,19 +41,19 @@ class DrapeSeasonResult:
     avg_var_l_increase: float
     avg_var_ab_increase: float
     avg_edge_harshness_increase: float
-    colors: List[DrapeColorResult]
+    colors: list[DrapeColorResult]
 
 
 @dataclass
 class DrapeEvaluation:
-    final_scores: Dict[str, float]
-    drape_scores: Dict[str, float]
-    baseline_scores: Dict[str, float]
+    final_scores: dict[str, float]
+    drape_scores: dict[str, float]
+    baseline_scores: dict[str, float]
     best_season: str
-    top2: List[str]
+    top2: list[str]
     confidence: float
-    season_details: Dict[str, DrapeSeasonResult]
-    drape_metrics: Dict[str, float]
+    season_details: dict[str, DrapeSeasonResult]
+    drape_metrics: dict[str, float]
     drape_broken: bool
     effective_drape_weight: float
 
@@ -70,7 +71,7 @@ class ColorDrapeContext:
     image_rgb: np.ndarray
     regions: FaceRegionResult
     baseline_skin: ColorFeatures
-    season_hint: Optional[str]
+    season_hint: str | None
     baseline_hue: float
     baseline_stats: dict[str, float]
     render_context: DrapeRenderContext
@@ -83,7 +84,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
 
 
-def _select_representative_colors(colors: List[str], min_colors: int = 6, max_colors: int = 10) -> List[str]:
+def _select_representative_colors(colors: list[str], min_colors: int = 6, max_colors: int = 10) -> list[str]:
     if not colors:
         return []
     if len(colors) <= max_colors:
@@ -138,7 +139,7 @@ def apply_drape_color(
     image_rgb: np.ndarray,
     landmarks_px: np.ndarray,
     color_hex: str,
-    render_context: Optional[DrapeRenderContext] = None,
+    render_context: DrapeRenderContext | None = None,
 ) -> np.ndarray:
     """Render a large drape region around/under the face while keeping face area untouched."""
     h, w = image_rgb.shape[:2]
@@ -169,7 +170,7 @@ def _angle_delta(a1: float, a2: float) -> float:
     return float(min(d, 2.0 * np.pi - d))
 
 
-def _season_margin_confidence(scores: Dict[str, float]) -> float:
+def _season_margin_confidence(scores: dict[str, float]) -> float:
     raw = np.array([scores[s] for s in SEASONS], dtype=np.float64)
     shifted = raw - np.max(raw)
     exp_vals = np.exp(shifted)
@@ -213,9 +214,14 @@ def _compute_color_result(
     baseline_hue: float,
     baseline_stats: dict[str, float],
     color_hex: str,
-    season_hint: Optional[str] = None,
-    render_context: Optional[DrapeRenderContext] = None,
-) -> Optional[DrapeColorResult]:
+    season_hint: str | None = None,
+    render_context: DrapeRenderContext | None = None,
+) -> DrapeColorResult | None:
+    cfg = load_analysis_config()["drape_scoring"]
+    weights_cfg = cfg["weights"]
+    norm_cfg = cfg["normalization"]
+    sat_bias_cfg = cfg["season_saturation_bias"]
+    clarity_cfg = cfg["clarity"]
     draped = apply_drape_color(image_rgb, regions.landmarks_px, color_hex, render_context=render_context)
     skin_after = compute_robust_lab_features(draped, regions.left_mask, regions.right_mask, min_samples=300)
     if skin_after is None:
@@ -235,46 +241,43 @@ def _compute_color_result(
     var_ab_increase = max(0.0, draped_stats["var_ab"] - baseline_stats["var_ab"])
     edge_harshness_increase = max(0.0, draped_stats["edge_var"] - baseline_stats["edge_var"])
 
-    p_l = min(delta_l_skin / 12.0, 1.0)
-    p_c = min(delta_chroma_skin / 10.0, 1.0)
-    p_h = min(delta_hue_skin / 0.9, 1.0)
+    p_l = min(delta_l_skin / float(norm_cfg["delta_l"]), 1.0)
+    p_c = min(delta_chroma_skin / float(norm_cfg["delta_chroma"]), 1.0)
+    p_h = min(delta_hue_skin / float(norm_cfg["delta_hue"]), 1.0)
     p_g = grey_cast_penalty
-    p_var_l = min(var_l_increase / 20.0, 1.0)
-    p_var_ab = min(var_ab_increase / 50.0, 1.0)
-    p_edge = min(edge_harshness_increase / max(20.0, 0.45 * baseline_stats["edge_var"] + 1e-6), 1.0)
+    p_var_l = min(var_l_increase / float(norm_cfg["var_l"]), 1.0)
+    p_var_ab = min(var_ab_increase / float(norm_cfg["var_ab"]), 1.0)
+    p_edge = min(
+        edge_harshness_increase / max(float(norm_cfg["edge_min"]), float(norm_cfg["edge_ratio"]) * baseline_stats["edge_var"] + 1e-6),
+        1.0,
+    )
 
-    p_sat_pos = min(max(0.0, delta_chroma_skin_signed) / 8.0, 1.0)
-    p_sat_neg = min(max(0.0, -delta_chroma_skin_signed) / 8.0, 1.0)
-    # Default saturation stress.
-    p_sat = 0.5 * p_sat_pos + 0.5 * p_sat_neg
-    if season_hint == "Summer":
-        # Penalize over-saturation stress more strongly in Summer drapes.
-        p_sat = 0.75 * p_sat_pos + 0.25 * p_sat_neg
-    elif season_hint == "Winter":
-        # Winter can handle saturation; less penalty on positive shifts by default.
-        p_sat = 0.35 * p_sat_pos + 0.65 * p_sat_neg
+    p_sat_pos = min(max(0.0, delta_chroma_skin_signed) / float(norm_cfg["sat"]), 1.0)
+    p_sat_neg = min(max(0.0, -delta_chroma_skin_signed) / float(norm_cfg["sat"]), 1.0)
+    pos_w, neg_w = sat_bias_cfg.get(season_hint or "", sat_bias_cfg["default"])
+    p_sat = float(pos_w) * p_sat_pos + float(neg_w) * p_sat_neg
 
-    clarity_norm = float(np.clip((baseline_skin.chroma - 18.0) / 12.0, -1.0, 1.0))
+    clarity_norm = float(np.clip((baseline_skin.chroma - float(clarity_cfg["center"])) / float(clarity_cfg["scale"]), -1.0, 1.0))
     p_clarity_mismatch = 0.0
     if season_hint == "Winter":
-        # Clear winter colors penalize muted faces more.
         muted_factor = max(0.0, -clarity_norm)
-        p_clarity_mismatch = muted_factor * (0.45 * p_sat_pos + 0.30 * p_var_ab + 0.25 * p_edge)
+        weights = clarity_cfg["Winter"]
+        p_clarity_mismatch = muted_factor * (float(weights[0]) * p_sat_pos + float(weights[1]) * p_var_ab + float(weights[2]) * p_edge)
     elif season_hint == "Summer":
-        # Muted summer colors penalize high-clarity faces more.
         clear_factor = max(0.0, clarity_norm)
-        p_clarity_mismatch = clear_factor * (0.55 * p_sat_neg + 0.25 * p_var_ab + 0.20 * p_edge)
+        weights = clarity_cfg["Summer"]
+        p_clarity_mismatch = clear_factor * (float(weights[0]) * p_sat_neg + float(weights[1]) * p_var_ab + float(weights[2]) * p_edge)
 
     total_penalty = (
-        0.20 * p_l
-        + 0.15 * p_c
-        + 0.15 * p_h
-        + 0.10 * p_g
-        + 0.12 * p_var_l
-        + 0.10 * p_var_ab
-        + 0.08 * p_edge
-        + 0.06 * p_sat
-        + 0.04 * min(p_clarity_mismatch, 1.0)
+        float(weights_cfg["delta_l"]) * p_l
+        + float(weights_cfg["delta_chroma"]) * p_c
+        + float(weights_cfg["delta_hue"]) * p_h
+        + float(weights_cfg["grey_cast"]) * p_g
+        + float(weights_cfg["var_l"]) * p_var_l
+        + float(weights_cfg["var_ab"]) * p_var_ab
+        + float(weights_cfg["edge"]) * p_edge
+        + float(weights_cfg["sat"]) * p_sat
+        + float(weights_cfg["clarity"]) * min(p_clarity_mismatch, 1.0)
     )
     color_score = float(1.0 - total_penalty)
 
@@ -364,23 +367,27 @@ def evaluate_drape_scores(
     image_rgb: np.ndarray,
     regions: FaceRegionResult,
     baseline_skin: ColorFeatures,
-    baseline_scores: Dict[str, float],
-    palettes: Dict[str, List[str]],
+    baseline_scores: dict[str, float],
+    palettes: dict[str, list[str]],
     baseline_weight: float = 0.6,
     drape_weight: float = 0.4,
 ) -> DrapeEvaluation:
+    cfg = load_analysis_config()["drape_scoring"]
+    norm_cfg = cfg["normalization"]
+    sat_bias_cfg = cfg["season_saturation_bias"]
+    clarity_cfg = cfg["clarity"]
     baseline_hue = _hue_proxy(baseline_skin)
     baseline_stats = _extract_cheek_lab_stats(image_rgb, regions.left_mask, regions.right_mask)
     render_context = _build_drape_render_context(image_rgb.shape, regions.landmarks_px)
-    season_details: Dict[str, DrapeSeasonResult] = {}
-    drape_scores: Dict[str, float] = {}
-    all_penalties: List[float] = []
-    cool_hi_penalties: List[float] = []
-    cool_lo_penalties: List[float] = []
+    season_details: dict[str, DrapeSeasonResult] = {}
+    drape_scores: dict[str, float] = {}
+    all_penalties: list[float] = []
+    cool_hi_penalties: list[float] = []
+    cool_lo_penalties: list[float] = []
 
     for season in SEASONS:
         season_colors = _select_representative_colors(palettes.get(season, []), min_colors=6, max_colors=10)
-        color_results: List[DrapeColorResult] = []
+        color_results: list[DrapeColorResult] = []
         for color_hex in season_colors:
             color_result = _compute_color_result(
                 image_rgb=image_rgb,
@@ -395,32 +402,31 @@ def evaluate_drape_scores(
             if color_result is None:
                 continue
             total_penalty = float(color_result.total_penalty)
-            p_sat_pos = min(max(0.0, color_result.delta_chroma_skin_signed) / 8.0, 1.0)
-            p_sat_neg = min(max(0.0, -color_result.delta_chroma_skin_signed) / 8.0, 1.0)
-            p_sat = 0.5 * p_sat_pos + 0.5 * p_sat_neg
-            if season == "Summer":
-                p_sat = 0.75 * p_sat_pos + 0.25 * p_sat_neg
-            elif season == "Winter":
-                p_sat = 0.35 * p_sat_pos + 0.65 * p_sat_neg
-            clarity_norm = float(np.clip((baseline_skin.chroma - 18.0) / 12.0, -1.0, 1.0))
+            p_sat_pos = min(max(0.0, color_result.delta_chroma_skin_signed) / float(norm_cfg["sat"]), 1.0)
+            p_sat_neg = min(max(0.0, -color_result.delta_chroma_skin_signed) / float(norm_cfg["sat"]), 1.0)
+            pos_w, neg_w = sat_bias_cfg.get(season, sat_bias_cfg["default"])
+            p_sat = float(pos_w) * p_sat_pos + float(neg_w) * p_sat_neg
+            clarity_norm = float(np.clip((baseline_skin.chroma - float(clarity_cfg["center"])) / float(clarity_cfg["scale"]), -1.0, 1.0))
             p_clarity_mismatch = 0.0
             if season == "Winter":
                 muted_factor = max(0.0, -clarity_norm)
+                weights = clarity_cfg["Winter"]
                 p_clarity_mismatch = muted_factor * (
-                    0.45 * p_sat_pos
-                    + 0.30 * min(color_result.var_ab_increase / 50.0, 1.0)
+                    float(weights[0]) * p_sat_pos
+                    + float(weights[1]) * min(color_result.var_ab_increase / float(norm_cfg["var_ab"]), 1.0)
                     + 0.25 * min(
-                        color_result.edge_harshness_increase / max(20.0, 0.45 * baseline_stats["edge_var"] + 1e-6),
+                        color_result.edge_harshness_increase / max(float(norm_cfg["edge_min"]), float(norm_cfg["edge_ratio"]) * baseline_stats["edge_var"] + 1e-6),
                         1.0,
                     )
                 )
             elif season == "Summer":
                 clear_factor = max(0.0, clarity_norm)
+                weights = clarity_cfg["Summer"]
                 p_clarity_mismatch = clear_factor * (
-                    0.55 * p_sat_neg
-                    + 0.25 * min(color_result.var_ab_increase / 50.0, 1.0)
-                    + 0.20 * min(
-                        color_result.edge_harshness_increase / max(20.0, 0.45 * baseline_stats["edge_var"] + 1e-6),
+                    float(weights[0]) * p_sat_neg
+                    + float(weights[1]) * min(color_result.var_ab_increase / float(norm_cfg["var_ab"]), 1.0)
+                    + float(weights[2]) * min(
+                        color_result.edge_harshness_increase / max(float(norm_cfg["edge_min"]), float(norm_cfg["edge_ratio"]) * baseline_stats["edge_var"] + 1e-6),
                         1.0,
                     )
                 )

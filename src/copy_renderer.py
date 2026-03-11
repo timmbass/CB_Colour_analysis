@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from src.json_utils import load_json_object
+from src.paths import resolve_repo_path
 
 _REQUIRED_RULE_KEYS = ("lexicon", "bands", "templates", "profiles")
 _RULES_CACHE: dict[str, dict[str, Any]] = {}
@@ -69,13 +71,13 @@ def _deterministic_choice(options: list[str], seed_text: str) -> str:
 
 
 def load_copy_rules(path: str | Path) -> dict[str, Any]:
-    path_obj = Path(path)
+    path_obj = resolve_repo_path(path)
     cache_key = str(path_obj.resolve())
     cached = _RULES_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    rules = json.loads(path_obj.read_text(encoding="utf-8"))
+    rules = load_json_object(path_obj)
     missing = [key for key in _REQUIRED_RULE_KEYS if key not in rules]
     if missing:
         raise ValueError(f"copy rules missing required keys: {', '.join(missing)}")
@@ -106,9 +108,9 @@ def band_for(value: float, band_defs: list[dict[str, Any]]) -> dict[str, Any]:
         if lower is None and upper is None:
             dist = 0.0
         elif lower is None:
-            dist = abs(value_f - float(upper))
+            dist = abs(value_f - float(cast(float, upper)))
         elif upper is None:
-            dist = abs(value_f - float(lower))
+            dist = abs(value_f - float(cast(float, lower)))
         else:
             center = (float(lower) + float(upper)) / 2.0
             dist = abs(value_f - center)

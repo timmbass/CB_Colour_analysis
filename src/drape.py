@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 import numpy as np
 
 
@@ -14,7 +12,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(c[i : i + 2], 16) for i in (0, 2, 4))
 
 
-def render_drape_strip(image_rgb: np.ndarray, colors: List[str], strip_height: int = 70) -> np.ndarray:
+def render_drape_strip(image_rgb: np.ndarray, colors: list[str], strip_height: int = 70) -> np.ndarray:
     """Render a horizontal strip of season colors beneath the source image."""
     strip = render_color_strip(colors, width=image_rgb.shape[1], height=strip_height, style="blocks")
     if strip is None:
@@ -22,7 +20,7 @@ def render_drape_strip(image_rgb: np.ndarray, colors: List[str], strip_height: i
     return np.vstack([image_rgb, strip])
 
 
-def render_color_strip(colors: List[str], width: int, height: int, style: str = "blocks") -> np.ndarray | None:
+def render_color_strip(colors: list[str], width: int, height: int, style: str = "blocks") -> np.ndarray | None:
     """Render a colour strip from hex values as equal-width blocks with thin borders."""
     if not colors or width <= 0 or height <= 0:
         return None

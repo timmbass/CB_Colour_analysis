@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -13,8 +12,8 @@ from src.color_features import ColorFeatures, compute_robust_lab_from_pixels
 
 @dataclass
 class RegionDiagnostics:
-    hair_features: Optional[ColorFeatures]
-    iris_features: Optional[ColorFeatures]
+    hair_features: ColorFeatures | None
+    iris_features: ColorFeatures | None
     hair_mask: np.ndarray
     iris_mask: np.ndarray
 

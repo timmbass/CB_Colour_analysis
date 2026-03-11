@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Dict, List, Optional, TypedDict
+from typing import TypedDict, cast
+
+from src.json_utils import load_json_file
+from src.paths import resolve_repo_path
 
 
 class PaletteMeta(TypedDict, total=False):
-    colors: List[str]
+    colors: list[str]
     description: str
     recommendations: str
 
@@ -16,10 +18,10 @@ class PaletteMeta(TypedDict, total=False):
 class RecommendationBlock(TypedDict, total=False):
     title: str
     description: str
-    best_colors: List[str]
-    best_neutrals: List[str]
-    metals: List[str]
-    avoid: List[str]
+    best_colors: list[str]
+    best_neutrals: list[str]
+    metals: list[str]
+    avoid: list[str]
     overall_effect: str
     style_note: str
 
@@ -33,20 +35,18 @@ class SeasonRecommendations(TypedDict, total=False):
 class SeasonDescriptionBlock(TypedDict, total=False):
     title: str
     description: str
-    best_colors: List[str]
-    best_neutrals: List[str]
-    metals: List[str]
-    avoid: List[str]
+    best_colors: list[str]
+    best_neutrals: list[str]
+    metals: list[str]
+    avoid: list[str]
     overall_effect: str
     style_note: str
 
 
-def load_palettes(path: str | Path) -> Dict[str, List[str]]:
-    palette_path = Path(path)
-    with palette_path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
+def load_palettes(path: str | Path) -> dict[str, list[str]]:
+    raw = load_json_file(resolve_repo_path(path))
 
-    normalized: Dict[str, List[str]] = {}
+    normalized: dict[str, list[str]] = {}
     for season, colors in raw.items():
         if isinstance(colors, list):
             normalized[season] = [str(c) for c in colors]
@@ -58,16 +58,14 @@ def load_palettes(path: str | Path) -> Dict[str, List[str]]:
     return normalized
 
 
-def palette_for_season(palettes: Dict[str, List[str]], season: str) -> List[str]:
+def palette_for_season(palettes: dict[str, list[str]], season: str) -> list[str]:
     return palettes.get(season, [])
 
 
-def load_palette_metadata(path: str | Path) -> Dict[str, PaletteMeta]:
-    palette_path = Path(path)
-    with palette_path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
+def load_palette_metadata(path: str | Path) -> dict[str, PaletteMeta]:
+    raw = load_json_file(resolve_repo_path(path))
 
-    normalized: Dict[str, PaletteMeta] = {}
+    normalized: dict[str, PaletteMeta] = {}
     for season, payload in raw.items():
         entry: PaletteMeta = {}
         if isinstance(payload, list):
@@ -88,12 +86,10 @@ def load_palette_metadata(path: str | Path) -> Dict[str, PaletteMeta]:
     return normalized
 
 
-def load_recommendations(path: str | Path) -> Dict[str, SeasonRecommendations]:
-    rec_path = Path(path)
-    with rec_path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
+def load_recommendations(path: str | Path) -> dict[str, SeasonRecommendations]:
+    raw = load_json_file(resolve_repo_path(path))
 
-    normalized: Dict[str, SeasonRecommendations] = {}
+    normalized: dict[str, SeasonRecommendations] = {}
     for season, payload in raw.items():
         if not isinstance(payload, dict):
             continue
@@ -101,22 +97,20 @@ def load_recommendations(path: str | Path) -> Dict[str, SeasonRecommendations]:
         for key in ("primary", "strong", "borderline"):
             block = payload.get(key)
             if isinstance(block, dict):
-                entry[key] = block
+                entry[key] = cast(RecommendationBlock, block)
         if entry:
             normalized[season] = entry
 
     return normalized
 
 
-def load_season_descriptions(path: str | Path) -> Dict[str, SeasonDescriptionBlock]:
-    desc_path = Path(path)
-    with desc_path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
+def load_season_descriptions(path: str | Path) -> dict[str, SeasonDescriptionBlock]:
+    raw = load_json_file(resolve_repo_path(path))
 
-    normalized: Dict[str, SeasonDescriptionBlock] = {}
+    normalized: dict[str, SeasonDescriptionBlock] = {}
     if not isinstance(raw, dict):
         return normalized
     for key, payload in raw.items():
         if isinstance(payload, dict):
-            normalized[str(key)] = payload
+            normalized[str(key)] = cast(SeasonDescriptionBlock, payload)
     return normalized
